@@ -79,6 +79,12 @@ CREATE TABLE IF NOT EXISTS historial_cambio (
     factura_id INTEGER, campo TEXT, valor_anterior TEXT, valor_nuevo TEXT,
     usuario TEXT, fecha TEXT, motivo TEXT
 );
+CREATE TABLE IF NOT EXISTS anticipo (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    empresa TEXT, identificacion TEXT, proveedor TEXT,
+    fecha TEXT, valor REAL, origen TEXT, numero_comprobante TEXT,
+    usuario TEXT, created_at TEXT
+);
 """
 
 
@@ -349,29 +355,38 @@ def registrar_pago(con, fid, datos, usuario="demo"):
     valor = to_float(datos.get("valor_pagado"))
     if valor <= 0:
         return False, "El valor del pago debe ser mayor a cero."
-    if valor > f["saldo_tesoreria"] + 0.001:
-        return False, ("El pago ({:,.0f}) excede el saldo pendiente ({:,.0f}) - RN-08."
-                       .format(valor, f["saldo_tesoreria"]))
     for k in ("fecha_pago", "banco", "cuenta_bancaria", "medio_pago", "numero_comprobante"):
         if not str(datos.get(k) or "").strip():
             return False, "Faltan datos obligatorios del pago (fecha, banco, cuenta, medio, comprobante)."
-    con.execute(
-        "INSERT INTO pago (factura_id, fecha_pago, empresa, banco, cuenta_bancaria, medio_pago,"
-        " numero_comprobante, valor_pagado, notas, usuario, created_at)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (fid, str(datos.get("fecha_pago")), r["empresa"], datos.get("banco"),
-         datos.get("cuenta_bancaria"), datos.get("medio_pago"),
-         datos.get("numero_comprobante"), valor, datos.get("notas", ""), usuario, now()))
-    nuevo_abonado = round((r["total_abonado"] or 0) + valor, 2)
-    saldo_tes = round((r["valor_original"] or 0) - nuevo_abonado, 2)
-    nuevo_estado = "Pagada" if saldo_tes <= 0.001 else "Abonada parcialmente"
-    if nuevo_estado != r["estado"]:
-        log_cambio(con, fid, "estado", r["estado"], nuevo_estado, usuario, "Aplicacion de pago")
-    con.execute("UPDATE factura SET total_abonado=?, estado=? WHERE id=?",
-                (nuevo_abonado, nuevo_estado, fid))
+    # El excedente sobre el saldo de la factura se lleva a anticipo del proveedor.
+    aplicado = round(min(valor, f["saldo_tesoreria"]), 2)
+    excedente = round(valor - aplicado, 2)
+    if aplicado > 0:
+        con.execute(
+            "INSERT INTO pago (factura_id, fecha_pago, empresa, banco, cuenta_bancaria, medio_pago,"
+            " numero_comprobante, valor_pagado, notas, usuario, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (fid, str(datos.get("fecha_pago")), r["empresa"], datos.get("banco"),
+             datos.get("cuenta_bancaria"), datos.get("medio_pago"),
+             datos.get("numero_comprobante"), aplicado, datos.get("notas", ""), usuario, now()))
+        nuevo_abonado = round((r["total_abonado"] or 0) + aplicado, 2)
+        saldo_tes = round((r["valor_original"] or 0) - nuevo_abonado, 2)
+        nuevo_estado = "Pagada" if saldo_tes <= 0.001 else "Abonada parcialmente"
+        if nuevo_estado != r["estado"]:
+            log_cambio(con, fid, "estado", r["estado"], nuevo_estado, usuario, "Aplicacion de pago")
+        con.execute("UPDATE factura SET total_abonado=?, estado=? WHERE id=?",
+                    (nuevo_abonado, nuevo_estado, fid))
+    else:
+        saldo_tes = f["saldo_tesoreria"]
+    if excedente > 0:
+        registrar_anticipo(con, r["empresa"], r["identificacion"], r["proveedor"], excedente,
+                           "Excedente de pago factura " + str(r["numero_factura"]),
+                           datos.get("numero_comprobante", ""), usuario)
     con.commit()
-    return True, ("Pago registrado por {:,.0f}. Saldo de tesoreria: {:,.0f}."
-                  .format(valor, max(saldo_tes, 0)))
+    msg = "Pago registrado por {:,.0f}. Saldo de tesoreria: {:,.0f}.".format(aplicado, max(saldo_tes, 0))
+    if excedente > 0:
+        msg += " Excedente {:,.0f} llevado a anticipo del proveedor.".format(excedente)
+    return True, msg
 
 
 # --------------------------------------------------------------------------
@@ -449,12 +464,57 @@ def abono_por_proveedor(con, nit, monto, datos, empresa="", usuario="demo"):
         if ok:
             detalle.append({"factura": f["numero_factura"], "vencimiento": f["fecha_vencimiento"],
                             "cubeta": f["cubeta"], "abono": ap})
+    if remanente > 0:
+        prov_name = facturas[0]["proveedor"]
+        emp = empresa or facturas[0]["empresa"]
+        registrar_anticipo(con, emp, nit, prov_name, remanente,
+                           "Excedente de abono por proveedor",
+                           datos.get("numero_comprobante", ""), usuario)
     resumen = dict(n=len(detalle), aplicado=round(aplicado, 2), remanente=round(remanente, 2),
+                   anticipo=round(remanente, 2) if remanente > 0 else 0,
                    saldo_total=saldo_total, detalle=detalle)
     msg = "Abono aplicado a {} factura(s) por {:,.0f}.".format(len(detalle), aplicado)
     if remanente > 0:
-        msg += " Sobrante no aplicado (excede el saldo total del proveedor): {:,.0f}.".format(remanente)
+        msg += " Excedente {:,.0f} llevado a anticipo del proveedor.".format(remanente)
     return True, msg, resumen
+
+
+def registrar_anticipo(con, empresa, nit, proveedor, valor, origen, comprobante="", usuario="demo"):
+    con.execute(
+        "INSERT INTO anticipo (empresa, identificacion, proveedor, fecha, valor, origen,"
+        " numero_comprobante, usuario, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        (empresa, nit, proveedor, today().isoformat(), round(float(valor), 2),
+         origen, comprobante, usuario, now()))
+    con.commit()
+
+
+def saldo_anticipo_proveedor(con, nit):
+    r = con.execute("SELECT COALESCE(SUM(valor),0) v FROM anticipo WHERE identificacion=?",
+                    (nit,)).fetchone()
+    return round(r["v"], 2)
+
+
+def anticipos_resumen(con, empresa=""):
+    """Saldo de anticipo agrupado por proveedor."""
+    sql = "SELECT identificacion, MAX(proveedor) proveedor, SUM(valor) saldo, COUNT(*) movimientos FROM anticipo"
+    p = []
+    if empresa:
+        sql += " WHERE empresa=?"
+        p.append(empresa)
+    sql += " GROUP BY identificacion HAVING SUM(valor) <> 0 ORDER BY saldo DESC"
+    return [dict(nit=r["identificacion"], proveedor=r["proveedor"],
+                 saldo=round(r["saldo"], 2), movimientos=r["movimientos"])
+            for r in con.execute(sql, p).fetchall()]
+
+
+def anticipos_movimientos(con, nit=None):
+    sql = "SELECT * FROM anticipo"
+    p = []
+    if nit:
+        sql += " WHERE identificacion=?"
+        p.append(nit)
+    sql += " ORDER BY id DESC"
+    return [dict(r) for r in con.execute(sql, p).fetchall()]
 
 
 def cambiar_estado(con, fid, nuevo, motivo="", usuario="demo"):
@@ -496,7 +556,7 @@ def cargas_recientes(con, limit=20):
 
 
 def reset_db(con):
-    for t in ("pago", "error_carga", "historial_cambio", "carga_archivo", "factura"):
+    for t in ("pago", "anticipo", "error_carga", "historial_cambio", "carga_archivo", "factura"):
         con.execute("DELETE FROM " + t)
     con.commit()
 
