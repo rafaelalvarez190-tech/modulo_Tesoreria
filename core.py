@@ -1,0 +1,448 @@
+"""
+core.py — Lógica de negocio del Módulo de Tesorería Integral (Grupo Supre).
+Sin dependencias de Streamlit: maneja la base de datos SQLite, la carga/validación
+de archivos, la deduplicación (upsert), pagos, estados y los datos del dashboard.
+"""
+import os
+import io
+import csv
+import hashlib
+import sqlite3
+import datetime as dt
+
+try:
+    import pandas as pd
+    HAS_PANDAS = True
+except Exception:
+    HAS_PANDAS = False
+
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tesoreria.db")
+
+EXPECTED_COLS = [
+    "fecha_actualizacion", "empresa", "periodo", "codigo_cuenta", "nombre_cuenta",
+    "identificacion", "proveedor", "factura", "fecha_vencimiento", "dias_por_vencer",
+    "treinta_dias", "sesenta_dias", "noventa_dias", "mas_de_noventa",
+    "saldo_actual", "saldo_anterior", "debitos", "creditos",
+]
+REQUIRED_COLS = ["empresa", "identificacion", "proveedor", "factura", "saldo_actual"]
+
+ESTADOS = ["Pendiente", "En proceso", "Abonada parcialmente", "Pagada", "Anulada"]
+
+TRANSICIONES = {
+    "Pendiente": ["En proceso", "Abonada parcialmente", "Pagada", "Anulada"],
+    "En proceso": ["Pendiente", "Abonada parcialmente", "Pagada", "Anulada"],
+    "Abonada parcialmente": ["Abonada parcialmente", "Pagada", "Anulada"],
+    "Pagada": ["Abonada parcialmente"],
+    "Anulada": ["Pendiente"],
+}
+
+MEDIOS_PAGO = ["Transferencia", "Cheque", "Efectivo", "PSE", "Débito automático"]
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS factura (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    llave_unica TEXT UNIQUE NOT NULL,
+    empresa TEXT, periodo TEXT, codigo_cuenta TEXT, nombre_cuenta TEXT,
+    identificacion TEXT, proveedor TEXT, numero_factura TEXT,
+    fecha_vencimiento TEXT,
+    valor_original REAL DEFAULT 0,
+    saldo_contable REAL DEFAULT 0,
+    total_abonado REAL DEFAULT 0,
+    estado TEXT DEFAULT 'Pendiente',
+    fecha_estimada_pago TEXT,
+    notas TEXT,
+    hash_fila TEXT,
+    fecha_primera_carga TEXT,
+    fecha_ultima_actualizacion TEXT,
+    activo INTEGER DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS pago (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    factura_id INTEGER NOT NULL,
+    fecha_pago TEXT, empresa TEXT, banco TEXT, cuenta_bancaria TEXT,
+    medio_pago TEXT, numero_comprobante TEXT, valor_pagado REAL,
+    notas TEXT, usuario TEXT, created_at TEXT,
+    FOREIGN KEY (factura_id) REFERENCES factura(id)
+);
+CREATE TABLE IF NOT EXISTS carga_archivo (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre_archivo TEXT, fecha TEXT, usuario TEXT,
+    total_leidas INTEGER, nuevas INTEGER, actualizadas INTEGER,
+    sin_cambios INTEGER, rechazadas INTEGER
+);
+CREATE TABLE IF NOT EXISTS error_carga (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    carga_id INTEGER, fila INTEGER, motivo TEXT, dato TEXT
+);
+CREATE TABLE IF NOT EXISTS historial_cambio (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    factura_id INTEGER, campo TEXT, valor_anterior TEXT, valor_nuevo TEXT,
+    usuario TEXT, fecha TEXT, motivo TEXT
+);
+"""
+
+
+# --------------------------------------------------------------------------
+def get_conn(db_path=DB_PATH):
+    con = sqlite3.connect(db_path, check_same_thread=False)
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def init_db(con):
+    con.executescript(SCHEMA)
+    con.commit()
+
+
+def now():
+    return dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def today():
+    return dt.date.today()
+
+
+def norm(v):
+    return str(v if v is not None else "").strip().upper()
+
+
+def llave(empresa, nit, factura):
+    return f"{norm(empresa)}|{norm(nit)}|{norm(factura)}"
+
+
+def to_float(v):
+    if v is None:
+        return 0.0
+    s = str(v).strip()
+    if s == "" or s.lower() == "nan":
+        return 0.0
+    s = s.replace(" ", "")
+    if "," in s and "." in s:
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    elif "," in s:
+        if len(s.split(",")[-1]) == 2:
+            s = s.replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
+def row_hash(d):
+    base = "|".join(str(d.get(c, "")) for c in
+                     ["saldo_actual", "fecha_vencimiento", "periodo",
+                      "treinta_dias", "sesenta_dias", "noventa_dias", "mas_de_noventa"])
+    return hashlib.sha256(base.encode("utf-8")).hexdigest()
+
+
+def parse_bytes(filename, raw):
+    """Devuelve (rows, cols, error)."""
+    name = (filename or "").lower()
+    try:
+        if name.endswith((".xlsx", ".xls")):
+            if not HAS_PANDAS:
+                return None, [], "Para leer Excel se requiere pandas y openpyxl."
+            df = pd.read_excel(io.BytesIO(raw), dtype=str)
+            df.columns = [str(c).strip().lower() for c in df.columns]
+            return df.fillna("").to_dict(orient="records"), list(df.columns), None
+        text = None
+        for enc in ("utf-8-sig", "latin-1"):
+            try:
+                text = raw.decode(enc)
+                break
+            except UnicodeDecodeError:
+                continue
+        if text is None:
+            return None, [], "No se pudo decodificar el archivo."
+        sample = text[:4096]
+        delim = ";" if sample.count(";") > sample.count(",") else ","
+        if sample.count("\t") > max(sample.count(";"), sample.count(",")):
+            delim = "\t"
+        reader = csv.DictReader(io.StringIO(text), delimiter=delim)
+        cols = [c.strip().lower() for c in (reader.fieldnames or [])]
+        reader.fieldnames = cols
+        return [dict(r) for r in reader], cols, None
+    except Exception as e:
+        return None, [], f"Error leyendo el archivo: {e}"
+
+
+def aging_bucket(fecha_venc, saldo):
+    if saldo <= 0:
+        return "Pagada"
+    if not fecha_venc:
+        return "Sin fecha"
+    fv = None
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d"):
+        try:
+            fv = dt.datetime.strptime(str(fecha_venc)[:10], fmt).date()
+            break
+        except ValueError:
+            continue
+    if fv is None:
+        return "Sin fecha"
+    dias = (today() - fv).days
+    if dias < 0:
+        return "Corriente"
+    if dias <= 30:
+        return "1-30"
+    if dias <= 60:
+        return "31-60"
+    if dias <= 90:
+        return "61-90"
+    return ">90"
+
+
+def factura_dict(r):
+    d = dict(r)
+    d["saldo_tesoreria"] = round((d.get("valor_original") or 0) - (d.get("total_abonado") or 0), 2)
+    d["diferencia"] = round((d.get("saldo_contable") or 0) - d["saldo_tesoreria"], 2)
+    d["cubeta"] = aging_bucket(d.get("fecha_vencimiento"), d["saldo_tesoreria"])
+    d["vencida"] = d["cubeta"] in ("1-30", "31-60", "61-90", ">90")
+    return d
+
+
+def log_cambio(con, factura_id, campo, antes, despues, usuario, motivo=""):
+    con.execute(
+        "INSERT INTO historial_cambio (factura_id, campo, valor_anterior, valor_nuevo, usuario, fecha, motivo)"
+        " VALUES (?,?,?,?,?,?,?)",
+        (factura_id, campo, str(antes), str(despues), usuario, now(), motivo))
+
+
+# --------------------------------------------------------------------------
+def procesar_carga(con, filename, raw, usuario="demo"):
+    """Procesa un archivo. Devuelve (resumen_dict, errores_list) o lanza ValueError."""
+    rows, cols, err = parse_bytes(filename, raw)
+    if err:
+        raise ValueError(err)
+    faltantes = [c for c in REQUIRED_COLS if c not in cols]
+    if faltantes:
+        raise ValueError("Faltan columnas obligatorias: " + ", ".join(faltantes)
+                         + ". Encontradas: " + ", ".join(cols))
+
+    cur = con.execute(
+        "INSERT INTO carga_archivo (nombre_archivo, fecha, usuario, total_leidas, nuevas,"
+        " actualizadas, sin_cambios, rechazadas) VALUES (?,?,?,?,?,?,?,?)",
+        (filename, now(), usuario, len(rows), 0, 0, 0, 0))
+    carga_id = cur.lastrowid
+
+    nuevas = actualizadas = sin_cambios = rechazadas = 0
+    errores = []
+    vistas = set()
+
+    for i, r in enumerate(rows, start=2):
+        empresa = (r.get("empresa") or "").strip()
+        nit = (r.get("identificacion") or "").strip()
+        numfac = (r.get("factura") or "").strip()
+        if not (empresa and nit and numfac):
+            rechazadas += 1
+            errores.append((i, "Faltan empresa/identificación/factura", str(r)[:200]))
+            continue
+        lk = llave(empresa, nit, numfac)
+        if lk in vistas:
+            rechazadas += 1
+            errores.append((i, "Duplicado dentro del mismo archivo", lk))
+            continue
+        vistas.add(lk)
+        saldo = to_float(r.get("saldo_actual"))
+        if saldo < 0:
+            rechazadas += 1
+            errores.append((i, "Saldo negativo", str(r.get("saldo_actual"))))
+            continue
+        h = row_hash(r)
+        fv = (r.get("fecha_vencimiento") or "").strip()
+        periodo = (r.get("periodo") or "").strip()
+        existente = con.execute("SELECT * FROM factura WHERE llave_unica=?", (lk,)).fetchone()
+        if existente is None:
+            con.execute(
+                "INSERT INTO factura (llave_unica, empresa, periodo, codigo_cuenta, nombre_cuenta,"
+                " identificacion, proveedor, numero_factura, fecha_vencimiento, valor_original,"
+                " saldo_contable, total_abonado, estado, hash_fila, fecha_primera_carga,"
+                " fecha_ultima_actualizacion, activo) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+                (lk, empresa, periodo, (r.get("codigo_cuenta") or "").strip(),
+                 (r.get("nombre_cuenta") or "").strip(), nit, (r.get("proveedor") or "").strip(),
+                 numfac, fv, saldo, saldo, 0, "Pendiente", h, now(), now()))
+            nuevas += 1
+        elif existente["hash_fila"] == h:
+            sin_cambios += 1
+        else:
+            if abs((existente["saldo_contable"] or 0) - saldo) > 0.001:
+                log_cambio(con, existente["id"], "saldo_contable",
+                           existente["saldo_contable"], saldo, usuario, "Carga de archivo")
+            con.execute(
+                "UPDATE factura SET saldo_contable=?, fecha_vencimiento=?, periodo=?,"
+                " hash_fila=?, fecha_ultima_actualizacion=? WHERE id=?",
+                (saldo, fv, periodo, h, now(), existente["id"]))
+            actualizadas += 1
+
+    for (fila, motivo, dato) in errores:
+        con.execute("INSERT INTO error_carga (carga_id, fila, motivo, dato) VALUES (?,?,?,?)",
+                    (carga_id, fila, motivo, dato))
+    con.execute("UPDATE carga_archivo SET nuevas=?, actualizadas=?, sin_cambios=?, rechazadas=? WHERE id=?",
+                (nuevas, actualizadas, sin_cambios, rechazadas, carga_id))
+    con.commit()
+    resumen = dict(carga_id=carga_id, leidas=len(rows), nuevas=nuevas,
+                   actualizadas=actualizadas, sin_cambios=sin_cambios, rechazadas=rechazadas)
+    return resumen, errores
+
+
+def list_facturas(con, q="", estado="", empresa="", solo_vencidas=False):
+    sql = "SELECT * FROM factura WHERE activo=1"
+    p = []
+    if q:
+        sql += " AND (proveedor LIKE ? OR numero_factura LIKE ? OR identificacion LIKE ?)"
+        p += [f"%{q}%", f"%{q}%", f"%{q}%"]
+    if estado:
+        sql += " AND estado=?"; p.append(estado)
+    if empresa:
+        sql += " AND empresa=?"; p.append(empresa)
+    sql += " ORDER BY fecha_vencimiento"
+    items = [factura_dict(r) for r in con.execute(sql, p).fetchall()]
+    if solo_vencidas:
+        items = [f for f in items if f["vencida"] and f["estado"] != "Anulada"]
+    return items
+
+
+def get_factura(con, fid):
+    r = con.execute("SELECT * FROM factura WHERE id=?", (fid,)).fetchone()
+    return factura_dict(r) if r else None
+
+
+def empresas_distintas(con):
+    return [r["empresa"] for r in con.execute(
+        "SELECT DISTINCT empresa FROM factura ORDER BY empresa").fetchall()]
+
+
+def pagos_de(con, fid):
+    return [dict(r) for r in con.execute(
+        "SELECT * FROM pago WHERE factura_id=? ORDER BY id DESC", (fid,)).fetchall()]
+
+
+def historial_de(con, fid):
+    return [dict(r) for r in con.execute(
+        "SELECT * FROM historial_cambio WHERE factura_id=? ORDER BY id DESC", (fid,)).fetchall()]
+
+
+def todos_los_pagos(con):
+    return [dict(r) for r in con.execute(
+        "SELECT p.*, f.numero_factura, f.proveedor FROM pago p "
+        "JOIN factura f ON f.id=p.factura_id ORDER BY p.id DESC").fetchall()]
+
+
+def registrar_pago(con, fid, datos, usuario="demo"):
+    r = con.execute("SELECT * FROM factura WHERE id=?", (fid,)).fetchone()
+    if not r:
+        return False, "Factura no encontrada."
+    f = factura_dict(r)
+    if f["estado"] == "Anulada":
+        return False, "No se puede pagar una factura anulada (RN-09)."
+    valor = to_float(datos.get("valor_pagado"))
+    if valor <= 0:
+        return False, "El valor del pago debe ser mayor a cero."
+    if valor > f["saldo_tesoreria"] + 0.001:
+        return False, f"El pago ({valor:,.0f}) excede el saldo pendiente ({f['saldo_tesoreria']:,.0f}) — RN-08."
+    for k in ("fecha_pago", "banco", "cuenta_bancaria", "medio_pago", "numero_comprobante"):
+        if not str(datos.get(k) or "").strip():
+            return False, "Faltan datos obligatorios del pago (fecha, banco, cuenta, medio, comprobante)."
+    con.execute(
+        "INSERT INTO pago (factura_id, fecha_pago, empresa, banco, cuenta_bancaria, medio_pago,"
+        " numero_comprobante, valor_pagado, notas, usuario, created_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (fid, str(datos.get("fecha_pago")), r["empresa"], datos.get("banco"),
+         datos.get("cuenta_bancaria"), datos.get("medio_pago"),
+         datos.get("numero_comprobante"), valor, datos.get("notas", ""), usuario, now()))
+    nuevo_abonado = round((r["total_abonado"] or 0) + valor, 2)
+    saldo_tes = round((r["valor_original"] or 0) - nuevo_abonado, 2)
+    nuevo_estado = "Pagada" if saldo_tes <= 0.001 else "Abonada parcialmente"
+    if nuevo_estado != r["estado"]:
+        log_cambio(con, fid, "estado", r["estado"], nuevo_estado, usuario, "Aplicación de pago")
+    con.execute("UPDATE factura SET total_abonado=?, estado=? WHERE id=?",
+                (nuevo_abonado, nuevo_estado, fid))
+    con.commit()
+    return True, f"Pago registrado por {valor:,.0f}. Saldo de tesorería: {max(saldo_tes, 0):,.0f}."
+
+
+def cambiar_estado(con, fid, nuevo, motivo="", usuario="demo"):
+    r = con.execute("SELECT * FROM factura WHERE id=?", (fid,)).fetchone()
+    if not r:
+        return False, "Factura no encontrada."
+    actual = r["estado"]
+    if nuevo not in TRANSICIONES.get(actual, []):
+        return False, f"Transición no permitida: {actual} → {nuevo}."
+    if nuevo == "Anulada" and not motivo.strip():
+        return False, "Anular requiere un motivo."
+    log_cambio(con, fid, "estado", actual, nuevo, usuario, motivo or "Cambio manual")
+    con.execute("UPDATE factura SET estado=? WHERE id=?", (nuevo, fid))
+    con.commit()
+    return True, f"Estado cambiado a {nuevo}."
+
+
+def editar_factura(con, fid, fecha_estimada_pago, notas, usuario="demo"):
+    r = con.execute("SELECT * FROM factura WHERE id=?", (fid,)).fetchone()
+    if not r:
+        return False, "Factura no encontrada."
+    if (r["fecha_estimada_pago"] or "") != (fecha_estimada_pago or ""):
+        log_cambio(con, fid, "fecha_estimada_pago", r["fecha_estimada_pago"],
+                   fecha_estimada_pago, usuario, "Edición manual")
+    con.execute("UPDATE factura SET fecha_estimada_pago=?, notas=? WHERE id=?",
+                (fecha_estimada_pago, notas, fid))
+    con.commit()
+    return True, "Factura actualizada."
+
+
+def errores_de_carga(con, carga_id):
+    return [dict(r) for r in con.execute(
+        "SELECT * FROM error_carga WHERE carga_id=? ORDER BY fila", (carga_id,)).fetchall()]
+
+
+def cargas_recientes(con, limit=20):
+    return [dict(r) for r in con.execute(
+        "SELECT * FROM carga_archivo ORDER BY id DESC LIMIT ?", (limit,)).fetchall()]
+
+
+def reset_db(con):
+    for t in ("pago", "error_carga", "historial_cambio", "carga_archivo", "factura"):
+        con.execute(f"DELETE FROM {t}")
+    con.commit()
+
+
+def dashboard_data(con):
+    facturas = list_facturas(con)
+    total_pagado = con.execute("SELECT COALESCE(SUM(valor_pagado),0) v FROM pago").fetchone()["v"]
+    activas = [f for f in facturas if f["estado"] != "Anulada"]
+    total_cxp = sum(f["saldo_tesoreria"] for f in activas)
+    total_abonado = sum(f["total_abonado"] for f in facturas if f["estado"] == "Abonada parcialmente")
+    total_pendiente = sum(f["saldo_tesoreria"] for f in facturas
+                          if f["estado"] in ("Pendiente", "En proceso"))
+    vencidas = [f for f in activas if f["vencida"]]
+    por_vencer = [f for f in facturas
+                  if f["cubeta"] == "Corriente" and f["estado"] not in ("Pagada", "Anulada")]
+    buckets = ["Corriente", "1-30", "31-60", "61-90", ">90"]
+    aging = {b: 0.0 for b in buckets}
+    for f in activas:
+        if f["cubeta"] in aging:
+            aging[f["cubeta"]] += f["saldo_tesoreria"]
+    estados_count = {e: 0 for e in ESTADOS}
+    for f in facturas:
+        estados_count[f["estado"]] = estados_count.get(f["estado"], 0) + 1
+    flujo = con.execute(
+        "SELECT substr(fecha_pago,1,10) d, SUM(valor_pagado) v FROM pago "
+        "GROUP BY substr(fecha_pago,1,10) ORDER BY d").fetchall()
+    flujo = [(r["d"], round(r["v"], 2)) for r in flujo]
+    empresas = {}
+    for f in activas:
+        empresas[f["empresa"]] = round(empresas.get(f["empresa"], 0) + f["saldo_tesoreria"], 2)
+    kpis = dict(
+        total_cxp=round(total_cxp, 2), total_pagado=round(total_pagado, 2),
+        total_abonado=round(total_abonado, 2), total_pendiente=round(total_pendiente, 2),
+        n_facturas=len(activas), n_vencidas=len(vencidas),
+        monto_vencido=round(sum(f["saldo_tesoreria"] for f in vencidas), 2),
+        n_por_vencer=len(por_vencer),
+        monto_por_vencer=round(sum(f["saldo_tesoreria"] for f in por_vencer), 2))
+    return dict(kpis=kpis, aging={k: round(v, 2) for k, v in aging.items()},
+                estados=estados_count, flujo=flujo,
+                empresas={k: v for k, v in sorted(empresas.items(), key=lambda x: -x[1])})

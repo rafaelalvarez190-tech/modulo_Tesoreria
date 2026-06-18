@@ -1,0 +1,29 @@
+fecha_actualizacion,empresa,periodo,codigo_cuenta,nombre_cuenta,identificacion,proveedor,factura,fecha_vencimiento,dias_por_vencer,treinta_dias,sesenta_dias,noventa_dias,mas_de_noventa,saldo_actual,saldo_anterior,debitos,creditos
+2026-06-18,Movicap,2026-06,233525,Costos y gastos por pagar,901222333,Logística Express SAS,FE-1000,2026-03-15,0,0,0,0,1250000,1250000,1250000,0,0
+2026-06-18,Mañana de Pascua,2026-06,233525,Costos y gastos por pagar,830555111,Tech Solutions Colombia Ltda,FE-1001,2026-08-17,60,0,0,0,0,350000,350000,0,0
+2026-06-18,Mañana de Pascua,2026-06,220505,Proveedores nacionales,800111222,Papelería Nacional,FE-1002,2026-04-09,0,0,0,780000,0,780000,780000,0,0
+2026-06-18,Confianza Global,2026-06,220505,Proveedores nacionales,830555111,Tech Solutions Colombia Ltda,FE-1003,2026-04-09,0,0,0,11200000,0,11200000,11200000,0,0
+2026-06-18,Confianza Global,2026-06,236540,Retención en la fuente,900123456,Distribuidora Andina S.A.S,FE-1004,2026-04-09,0,0,0,920000,0,920000,920000,0,0
+2026-06-18,Mañana de Pascua,2026-06,236540,Retención en la fuente,900123456,Distribuidora Andina S.A.S,FE-1005,2026-08-17,60,0,0,0,0,780000,780000,0,0
+2026-06-18,Suprecredito,2026-06,220505,Proveedores nacionales,800111222,Papelería Nacional,FE-1006,2026-07-28,40,0,0,0,0,4800000,4800000,0,0
+2026-06-18,Movicap,2026-06,220505,Proveedores nacionales,900777666,Combustibles del Norte SAS,FE-1007,2026-07-28,40,0,0,0,0,1250000,1250000,0,0
+2026-06-18,Mañana de Pascua,2026-06,236540,Retención en la fuente,901999888,Servicios Industriales del Valle,FE-1008,2026-05-04,0,0,1250000,0,0,1250000,1250000,0,0
+2026-06-18,Mañana de Pascua,2026-06,236540,Retención en la fuente,900555444,Constructora Pacífico,FE-1009,2026-05-29,0,2300000,0,0,0,2300000,2300000,0,0
+2026-06-18,Suprecredito,2026-06,236540,Retención en la fuente,830888999,Repuestos y Motores Ltda,FE-1010,2026-04-09,0,0,0,540000,0,540000,540000,0,0
+2026-06-18,Suprecredito,2026-06,220505,Proveedores nacionales,900555444,Constructora Pacífico,FE-1011,2026-07-13,25,0,0,0,0,11200000,11200000,0,0
+2026-06-18,Confianza Global,2026-06,233525,Costos y gastos por pagar,860333444,Seguros Bolívar S.A.,FE-1012,2026-08-17,60,0,0,0,0,6400000,6400000,0,0
+2026-06-18,Movicap,2026-06,220505,Proveedores nacionales,901999888,Servicios Industriales del Valle,FE-1013,2026-05-04,0,0,920000,0,0,920000,920000,0,0
+2026-06-18,Suprecredito,2026-06,233525,Costos y gastos por pagar,900555444,Constructora Pacífico,FE-1014,2026-07-28,40,0,0,0,0,6400000,6400000,0,0
+2026-06-18,Movicap,2026-06,233525,Costos y gastos por pagar,901444555,Marketing Digital 360,FE-1015,2026-08-17,60,0,0,0,0,1250000,1250000,0,0
+2026-06-18,Suprecredito,2026-06,233525,Costos y gastos por pagar,830888999,Repuestos y Motores Ltda,FE-1016,2026-05-04,0,0,2300000,0,0,2300000,2300000,0,0
+2026-06-18,Supremotos,2026-06,233525,Costos y gastos por pagar,901444555,Marketing Digital 360,FE-1017,2026-03-15,0,0,0,0,1250000,1250000,1250000,0,0
+2026-06-18,Mañana de Pascua,2026-06,233525,Costos y gastos por pagar,900555444,Constructora Pacífico,FE-1018,2026-06-21,3,0,0,0,0,2300000,2300000,0,0
+2026-06-18,Mañana de Pascua,2026-06,236540,Retención en la fuente,901444555,Marketing Digital 360,FE-1019,2026-07-13,25,0,0,0,0,1250000,1250000,0,0
+2026-06-18,Suprecredito,2026-06,233525,Costos y gastos por pagar,901999888,Servicios Industriales del Valle,FE-1020,2026-04-09,0,0,0,350000,0,350000,350000,0,0
+2026-06-18,Movicap,2026-06,236540,Retención en la fuente,900555444,Constructora Pacífico,FE-1021,2026-07-13,25,0,0,0,0,15600000,15600000,0,0
+2026-06-18,Confianza Global,2026-06,220505,Proveedores nacionales,860333444,Seguros Bolívar S.A.,FE-1022,2026-07-13,25,0,0,0,0,2300000,2300000,0,0
+2026-06-18,Supremotos,2026-06,220505,Proveedores nacionales,900555444,Constructora Pacífico,FE-1023,2026-07-13,25,0,0,0,0,350000,350000,0,0
+2026-06-18,Supremotos,2026-06,220505,Proveedores nacionales,901999888,Servicios Industriales del Valle,FE-1024,2026-05-29,0,780000,0,0,0,780000,780000,0,0
+2026-06-18,Confianza Global,2026-06,220505,Proveedores nacionales,901444555,Marketing Digital 360,FE-1025,2026-05-04,0,0,6400000,0,0,6400000,6400000,0,0
+2026-06-18,Confianza Global,2026-06,233525,Costos y gastos por pagar,830888999,Repuestos y Motores Ltda,FE-1026,2026-05-04,0,0,780000,0,0,780000,780000,0,0
+2026-06-18,Mañana de Pascua,2026-06,236540,Retención en la fuente,901999888,Servicios Industriales del Valle,FE-1027,2026-06-28,10,0,0,0,0,2300000,2300000,0,0
