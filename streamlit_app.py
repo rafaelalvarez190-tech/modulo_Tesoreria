@@ -213,6 +213,39 @@ def _abono_por_proveedor(con):
             if ok:
                 st.rerun()
 
+    # ---- Cruce de anticipo ----
+    st.write("---")
+    st.markdown("**Cruce de anticipo**")
+    st.caption("Aplica el saldo de anticipo disponible del proveedor contra sus facturas "
+               "(de la mas vencida a la menos vencida), sin movimiento bancario.")
+    if anticipo_total <= 0:
+        st.caption("Este proveedor no tiene saldo de anticipo disponible para cruzar.")
+    elif not facs:
+        st.caption("No hay facturas con saldo para cruzar.")
+    else:
+        st.info(f"Anticipo disponible: {money(anticipo_total)}")
+        cruce_str = st.text_input("Monto a cruzar (vacio = todo el anticipo disponible)",
+                                  placeholder="Ej: 500.000", key="cruce_monto")
+        cruce_monto = core.to_float(cruce_str) if cruce_str.strip() else anticipo_total
+        tope = round(min(cruce_monto, anticipo_total, saldo_total), 2)
+        plan_c, aplic_c, _, _ = core.distribuir_abono(facs, tope)
+        cruce_by = {f["llave_unica"]: ap for f, ap in plan_c}
+        prevc = pd.DataFrame([{
+            "N factura": f["numero_factura"], "Vencimiento": f["fecha_vencimiento"] or "-",
+            "Antiguedad": f["cubeta"], "Saldo": money(f["saldo_tesoreria"]),
+            "Cruce": money(cruce_by.get(f["llave_unica"], 0)),
+            "Saldo restante": money(round(f["saldo_tesoreria"] - cruce_by.get(f["llave_unica"], 0), 2)),
+        } for f in facs])
+        st.dataframe(prevc, use_container_width=True, hide_index=True)
+        st.caption(f"Se cruzaran **{money(aplic_c)}** del anticipo; quedaran "
+                   f"{money(round(anticipo_total - aplic_c, 2))} de anticipo.")
+        with st.form("form_cruce"):
+            if st.form_submit_button("Aplicar cruce de anticipo", type="primary"):
+                ok, m, res = core.cruzar_anticipo(con, nit, tope, empresa, USUARIO)
+                (st.success if ok else st.error)(m)
+                if ok:
+                    st.rerun()
+
 
 def _estado_proveedor(con):
     """Estado actual por proveedor: cartera total y total vencido."""
