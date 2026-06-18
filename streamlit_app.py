@@ -210,6 +210,40 @@ def _abono_por_proveedor(con):
                 st.rerun()
 
 
+def _estado_proveedor(con):
+    """Estado actual por proveedor: cartera total y total vencido."""
+    st.markdown("Estado actual de cada proveedor: **saldo total de cartera** y **total vencido**. "
+                "Un proveedor esta *En mora* si tiene saldo vencido, o *Al dia* si no.")
+    empresa = st.selectbox("Empresa (opcional)", [""] + core.empresas_distintas(con),
+                           format_func=lambda x: "Todas" if x == "" else x, key="ep_emp")
+    provs = core.proveedores_con_saldo(con, empresa)
+    if not provs:
+        st.info("No hay proveedores con saldo pendiente.")
+        return
+    tot_cartera = round(sum(p["saldo"] for p in provs), 2)
+    tot_vencido = round(sum(p.get("vencido", 0) for p in provs), 2)
+    en_mora = sum(1 for p in provs if p.get("vencido", 0) > 0)
+    c = st.columns(4)
+    c[0].metric("Proveedores con cartera", len(provs))
+    c[1].metric("Cartera total", money(tot_cartera))
+    c[2].metric("Total vencido", money(tot_vencido),
+                f"{(tot_vencido / tot_cartera * 100):.0f}% de la cartera" if tot_cartera else None,
+                delta_color="inverse")
+    c[3].metric("Proveedores en mora", en_mora)
+
+    df = pd.DataFrame([{
+        "Proveedor": p["proveedor"], "NIT": p["nit"], "Facturas": p["n"],
+        "Cartera total": p["saldo"], "Vencido": p.get("vencido", 0),
+        "% vencido": round(p.get("vencido", 0) / p["saldo"] * 100, 1) if p["saldo"] else 0.0,
+        "Estado": "En mora" if p.get("vencido", 0) > 0 else "Al dia",
+    } for p in provs])
+    st.dataframe(df, use_container_width=True, hide_index=True, column_config={
+        "Cartera total": st.column_config.NumberColumn(format="$ %d"),
+        "Vencido": st.column_config.NumberColumn(format="$ %d"),
+        "% vencido": st.column_config.NumberColumn(format="%.1f%%"),
+    })
+
+
 # ---- sidebar / navegacion ----
 with st.sidebar:
     st.markdown(f"<h1 style='color:{NAVY};margin-bottom:0'>SUPRE</h1>"
@@ -331,7 +365,11 @@ elif pagina == "Carga masiva":
 # ===============================================================================
 elif pagina == "Facturas":
     st.title("Facturas (Cuentas por pagar)")
-    tab_list, tab_abono = st.tabs(["Listado y gestion", "Abono por proveedor"])
+    tab_estado, tab_list, tab_abono = st.tabs(
+        ["Estado del proveedor", "Listado y gestion", "Abono por proveedor"])
+
+    with tab_estado:
+        _estado_proveedor(con)
 
     with tab_list:
         f1, f2, f3, f4 = st.columns([3, 2, 2, 1])
