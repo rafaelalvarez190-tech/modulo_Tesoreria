@@ -1,7 +1,7 @@
 """
-core.py — Lógica de negocio del Módulo de Tesorería Integral (Grupo Supre).
-Sin dependencias de Streamlit: maneja la base de datos SQLite, la carga/validación
-de archivos, la deduplicación (upsert), pagos, estados y los datos del dashboard.
+core.py - Logica de negocio del Modulo de Tesoreria Integral (Grupo Supre).
+Sin dependencias de Streamlit: maneja la base de datos SQLite, la carga/validacion
+de archivos, la deduplicacion (upsert), pagos, estados y los datos del dashboard.
 """
 import os
 import io
@@ -36,7 +36,7 @@ TRANSICIONES = {
     "Anulada": ["Pendiente"],
 }
 
-MEDIOS_PAGO = ["Transferencia", "Cheque", "Efectivo", "PSE", "Débito automático"]
+MEDIOS_PAGO = ["Transferencia", "Cheque", "Efectivo", "PSE", "Debito automatico"]
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS factura (
@@ -107,7 +107,7 @@ def norm(v):
 
 
 def llave(empresa, nit, factura):
-    return f"{norm(empresa)}|{norm(nit)}|{norm(factura)}"
+    return norm(empresa) + "|" + norm(nit) + "|" + norm(factura)
 
 
 def to_float(v):
@@ -168,7 +168,7 @@ def parse_bytes(filename, raw):
         reader.fieldnames = cols
         return [dict(r) for r in reader], cols, None
     except Exception as e:
-        return None, [], f"Error leyendo el archivo: {e}"
+        return None, [], "Error leyendo el archivo: " + str(e)
 
 
 def aging_bucket(fecha_venc, saldo):
@@ -240,7 +240,7 @@ def procesar_carga(con, filename, raw, usuario="demo"):
         numfac = (r.get("factura") or "").strip()
         if not (empresa and nit and numfac):
             rechazadas += 1
-            errores.append((i, "Faltan empresa/identificación/factura", str(r)[:200]))
+            errores.append((i, "Faltan empresa/identificacion/factura", str(r)[:200]))
             continue
         lk = llave(empresa, nit, numfac)
         if lk in vistas:
@@ -295,11 +295,13 @@ def list_facturas(con, q="", estado="", empresa="", solo_vencidas=False):
     p = []
     if q:
         sql += " AND (proveedor LIKE ? OR numero_factura LIKE ? OR identificacion LIKE ?)"
-        p += [f"%{q}%", f"%{q}%", f"%{q}%"]
+        p += ["%" + q + "%", "%" + q + "%", "%" + q + "%"]
     if estado:
-        sql += " AND estado=?"; p.append(estado)
+        sql += " AND estado=?"
+        p.append(estado)
     if empresa:
-        sql += " AND empresa=?"; p.append(empresa)
+        sql += " AND empresa=?"
+        p.append(empresa)
     sql += " ORDER BY fecha_vencimiento"
     items = [factura_dict(r) for r in con.execute(sql, p).fetchall()]
     if solo_vencidas:
@@ -344,7 +346,8 @@ def registrar_pago(con, fid, datos, usuario="demo"):
     if valor <= 0:
         return False, "El valor del pago debe ser mayor a cero."
     if valor > f["saldo_tesoreria"] + 0.001:
-        return False, f"El pago ({valor:,.0f}) excede el saldo pendiente ({f['saldo_tesoreria']:,.0f}) — RN-08."
+        return False, ("El pago ({:,.0f}) excede el saldo pendiente ({:,.0f}) - RN-08."
+                       .format(valor, f["saldo_tesoreria"]))
     for k in ("fecha_pago", "banco", "cuenta_bancaria", "medio_pago", "numero_comprobante"):
         if not str(datos.get(k) or "").strip():
             return False, "Faltan datos obligatorios del pago (fecha, banco, cuenta, medio, comprobante)."
@@ -359,11 +362,93 @@ def registrar_pago(con, fid, datos, usuario="demo"):
     saldo_tes = round((r["valor_original"] or 0) - nuevo_abonado, 2)
     nuevo_estado = "Pagada" if saldo_tes <= 0.001 else "Abonada parcialmente"
     if nuevo_estado != r["estado"]:
-        log_cambio(con, fid, "estado", r["estado"], nuevo_estado, usuario, "Aplicación de pago")
+        log_cambio(con, fid, "estado", r["estado"], nuevo_estado, usuario, "Aplicacion de pago")
     con.execute("UPDATE factura SET total_abonado=?, estado=? WHERE id=?",
                 (nuevo_abonado, nuevo_estado, fid))
     con.commit()
-    return True, f"Pago registrado por {valor:,.0f}. Saldo de tesorería: {max(saldo_tes, 0):,.0f}."
+    return True, ("Pago registrado por {:,.0f}. Saldo de tesoreria: {:,.0f}."
+                  .format(valor, max(saldo_tes, 0)))
+
+
+# --------------------------------------------------------------------------
+# Abono a nivel de proveedor (distribucion por antiguedad)
+# --------------------------------------------------------------------------
+def proveedores_con_saldo(con, empresa=""):
+    """Devuelve [{nit, proveedor, n, saldo}] de proveedores con saldo pendiente."""
+    facs = list_facturas(con, empresa=empresa)
+    agg = {}
+    for f in facs:
+        if f["estado"] == "Anulada" or f["saldo_tesoreria"] <= 0:
+            continue
+        k = f["identificacion"]
+        if k not in agg:
+            agg[k] = {"nit": k, "proveedor": f["proveedor"], "n": 0, "saldo": 0.0}
+        agg[k]["n"] += 1
+        agg[k]["saldo"] = round(agg[k]["saldo"] + f["saldo_tesoreria"], 2)
+    return sorted(agg.values(), key=lambda x: -x["saldo"])
+
+
+def _orden_antiguedad(f):
+    """Clave de orden: vencimiento mas antiguo primero (= mas vencida primero)."""
+    fv = str(f.get("fecha_vencimiento") or "")[:10]
+    if not fv:
+        return ("9999-99-99", f["id"])
+    return (fv, f["id"])
+
+
+def facturas_pagables_proveedor(con, nit, empresa=""):
+    """Facturas del proveedor con saldo > 0, ordenadas de la mas vencida a la menos vencida."""
+    facs = [f for f in list_facturas(con, empresa=empresa)
+            if f["identificacion"] == nit and f["estado"] != "Anulada" and f["saldo_tesoreria"] > 0]
+    return sorted(facs, key=_orden_antiguedad)
+
+
+def distribuir_abono(facturas, monto):
+    """Reparte 'monto' entre 'facturas' (ya ordenadas) sin exceder el saldo de cada una
+    ni el saldo total. Devuelve (plan, aplicado, remanente, saldo_total).
+    plan = lista de (factura_dict, abono)."""
+    rem = round(float(monto), 2)
+    plan = []
+    saldo_total = round(sum(f["saldo_tesoreria"] for f in facturas), 2)
+    for f in facturas:
+        if rem <= 0:
+            break
+        ap = round(min(rem, f["saldo_tesoreria"]), 2)
+        if ap > 0:
+            plan.append((f, ap))
+            rem = round(rem - ap, 2)
+    aplicado = round(float(monto) - rem, 2)
+    return plan, aplicado, round(rem, 2), saldo_total
+
+
+def abono_por_proveedor(con, nit, monto, datos, empresa="", usuario="demo"):
+    """Aplica un abono al proveedor repartiendolo entre sus facturas mas vencidas primero,
+    sin exceder el saldo total. Devuelve (ok, mensaje, resumen)."""
+    monto = to_float(monto)
+    if monto <= 0:
+        return False, "El monto a abonar debe ser mayor a cero.", None
+    for k in ("fecha_pago", "banco", "cuenta_bancaria", "medio_pago", "numero_comprobante"):
+        if not str(datos.get(k) or "").strip():
+            return False, "Faltan datos obligatorios del pago (fecha, banco, cuenta, medio, comprobante).", None
+    facturas = facturas_pagables_proveedor(con, nit, empresa)
+    if not facturas:
+        return False, "El proveedor no tiene facturas con saldo pendiente.", None
+    plan, aplicado, remanente, saldo_total = distribuir_abono(facturas, monto)
+    detalle = []
+    for f, ap in plan:
+        d = dict(datos)
+        d["valor_pagado"] = ap
+        d["notas"] = (datos.get("notas") or "") + " [Abono por proveedor]"
+        ok, m = registrar_pago(con, f["id"], d, usuario)
+        if ok:
+            detalle.append({"factura": f["numero_factura"], "vencimiento": f["fecha_vencimiento"],
+                            "cubeta": f["cubeta"], "abono": ap})
+    resumen = dict(n=len(detalle), aplicado=round(aplicado, 2), remanente=round(remanente, 2),
+                   saldo_total=saldo_total, detalle=detalle)
+    msg = "Abono aplicado a {} factura(s) por {:,.0f}.".format(len(detalle), aplicado)
+    if remanente > 0:
+        msg += " Sobrante no aplicado (excede el saldo total del proveedor): {:,.0f}.".format(remanente)
+    return True, msg, resumen
 
 
 def cambiar_estado(con, fid, nuevo, motivo="", usuario="demo"):
@@ -372,13 +457,13 @@ def cambiar_estado(con, fid, nuevo, motivo="", usuario="demo"):
         return False, "Factura no encontrada."
     actual = r["estado"]
     if nuevo not in TRANSICIONES.get(actual, []):
-        return False, f"Transición no permitida: {actual} → {nuevo}."
+        return False, "Transicion no permitida: {} -> {}.".format(actual, nuevo)
     if nuevo == "Anulada" and not motivo.strip():
         return False, "Anular requiere un motivo."
     log_cambio(con, fid, "estado", actual, nuevo, usuario, motivo or "Cambio manual")
     con.execute("UPDATE factura SET estado=? WHERE id=?", (nuevo, fid))
     con.commit()
-    return True, f"Estado cambiado a {nuevo}."
+    return True, "Estado cambiado a {}.".format(nuevo)
 
 
 def editar_factura(con, fid, fecha_estimada_pago, notas, usuario="demo"):
@@ -387,7 +472,7 @@ def editar_factura(con, fid, fecha_estimada_pago, notas, usuario="demo"):
         return False, "Factura no encontrada."
     if (r["fecha_estimada_pago"] or "") != (fecha_estimada_pago or ""):
         log_cambio(con, fid, "fecha_estimada_pago", r["fecha_estimada_pago"],
-                   fecha_estimada_pago, usuario, "Edición manual")
+                   fecha_estimada_pago, usuario, "Edicion manual")
     con.execute("UPDATE factura SET fecha_estimada_pago=?, notas=? WHERE id=?",
                 (fecha_estimada_pago, notas, fid))
     con.commit()
@@ -406,7 +491,7 @@ def cargas_recientes(con, limit=20):
 
 def reset_db(con):
     for t in ("pago", "error_carga", "historial_cambio", "carga_archivo", "factura"):
-        con.execute(f"DELETE FROM {t}")
+        con.execute("DELETE FROM " + t)
     con.commit()
 
 
