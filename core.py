@@ -517,6 +517,45 @@ def anticipos_movimientos(con, nit=None):
     return [dict(r) for r in con.execute(sql, p).fetchall()]
 
 
+def cruzar_anticipo(con, nit, monto, empresa="", usuario="demo"):
+    """Cruza (aplica) el saldo de anticipo disponible del proveedor contra sus facturas,
+    de la mas vencida a la menos vencida. Registra pagos tipo 'Cruce de anticipo' y
+    descarga el anticipo con un movimiento negativo. Devuelve (ok, mensaje, resumen)."""
+    disponible = saldo_anticipo_proveedor(con, nit)
+    if disponible <= 0:
+        return False, "El proveedor no tiene saldo de anticipo disponible.", None
+    monto = to_float(monto)
+    if monto <= 0:
+        monto = disponible  # por defecto, cruzar todo el disponible
+    facturas = facturas_pagables_proveedor(con, nit, empresa)
+    if not facturas:
+        return False, "El proveedor no tiene facturas con saldo para cruzar.", None
+    saldo_total = round(sum(f["saldo_tesoreria"] for f in facturas), 2)
+    cruce = round(min(monto, disponible, saldo_total), 2)
+    if cruce <= 0:
+        return False, "No hay monto disponible para cruzar.", None
+    plan, aplicado, _, _ = distribuir_abono(facturas, cruce)
+    detalle = []
+    for f, ap in plan:
+        datos = dict(fecha_pago=today().isoformat(), banco="Anticipo", cuenta_bancaria="-",
+                     medio_pago="Cruce de anticipo", numero_comprobante="CRUCE",
+                     notas="Cruce de anticipo", valor_pagado=ap)
+        ok, m = registrar_pago(con, f["id"], datos, usuario)
+        if ok:
+            detalle.append({"factura": f["numero_factura"], "vencimiento": f["fecha_vencimiento"],
+                            "cubeta": f["cubeta"], "cruce": ap})
+    prov_name = facturas[0]["proveedor"]
+    emp = empresa or facturas[0]["empresa"]
+    # movimiento negativo que descarga el anticipo
+    registrar_anticipo(con, emp, nit, prov_name, -round(aplicado, 2),
+                       "Cruce de anticipo con facturas", "CRUCE", usuario)
+    resumen = dict(n=len(detalle), cruzado=round(aplicado, 2),
+                   anticipo_restante=round(disponible - aplicado, 2), detalle=detalle)
+    msg = "Cruce aplicado: {:,.0f} a {} factura(s). Anticipo restante: {:,.0f}.".format(
+        aplicado, len(detalle), disponible - aplicado)
+    return True, msg, resumen
+
+
 def cambiar_estado(con, fid, nuevo, motivo="", usuario="demo"):
     r = con.execute("SELECT * FROM factura WHERE id=?", (fid,)).fetchone()
     if not r:
