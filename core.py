@@ -382,9 +382,11 @@ def proveedores_con_saldo(con, empresa=""):
             continue
         k = f["identificacion"]
         if k not in agg:
-            agg[k] = {"nit": k, "proveedor": f["proveedor"], "n": 0, "saldo": 0.0}
+            agg[k] = {"nit": k, "proveedor": f["proveedor"], "n": 0, "saldo": 0.0, "vencido": 0.0}
         agg[k]["n"] += 1
         agg[k]["saldo"] = round(agg[k]["saldo"] + f["saldo_tesoreria"], 2)
+        if f["vencida"]:
+            agg[k]["vencido"] = round(agg[k]["vencido"] + f["saldo_tesoreria"], 2)
     return sorted(agg.values(), key=lambda x: -x["saldo"])
 
 
