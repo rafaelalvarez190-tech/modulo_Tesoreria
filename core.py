@@ -116,7 +116,9 @@ def to_float(v):
     s = str(v).strip()
     if s == "" or s.lower() == "nan":
         return 0.0
-    s = s.replace(" ", "")
+    neg = s.startswith("-") or (s.startswith("(") and s.endswith(")"))
+    s = s.replace("$", "").replace("(", "").replace(")", "").replace(" ", "")
+    s = s.lstrip("-")
     if "," in s and "." in s:
         if s.rfind(",") > s.rfind("."):
             s = s.replace(".", "").replace(",", ".")
@@ -127,10 +129,15 @@ def to_float(v):
             s = s.replace(",", ".")
         else:
             s = s.replace(",", "")
+    elif "." in s:
+        # solo puntos: separador de miles si hay varios o si el ultimo grupo es de 3 digitos
+        if s.count(".") > 1 or len(s.split(".")[-1]) == 3:
+            s = s.replace(".", "")
     try:
-        return float(s)
+        val = float(s)
     except ValueError:
         return 0.0
+    return -val if neg else val
 
 
 def row_hash(d):
@@ -248,11 +255,8 @@ def procesar_carga(con, filename, raw, usuario="demo"):
             errores.append((i, "Duplicado dentro del mismo archivo", lk))
             continue
         vistas.add(lk)
-        saldo = to_float(r.get("saldo_actual"))
-        if saldo < 0:
-            rechazadas += 1
-            errores.append((i, "Saldo negativo", str(r.get("saldo_actual"))))
-            continue
+        # La CxP suele exportarse en negativo desde el ERP: usamos el valor absoluto.
+        saldo = abs(to_float(r.get("saldo_actual")))
         h = row_hash(r)
         fv = (r.get("fecha_vencimiento") or "").strip()
         periodo = (r.get("periodo") or "").strip()
