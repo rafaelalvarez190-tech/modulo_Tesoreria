@@ -157,30 +157,40 @@ def _abono_por_proveedor(con):
         key="abp_prov")
     nit, saldo_total = opt["nit"], opt["saldo"]
 
+    vencido_total = opt.get("vencido", 0.0)
     c = st.columns(3)
     c[0].metric("Saldo total del proveedor", money(saldo_total))
-    c[1].metric("Facturas con saldo", opt["n"])
-    monto = c[2].number_input("Monto a abonar", min_value=0.0, max_value=float(saldo_total),
-                              step=10000.0, key="abp_monto")
+    c[1].metric("Saldo total vencido", money(vencido_total),
+                f"{(vencido_total / saldo_total * 100):.0f}% del saldo" if saldo_total else None,
+                delta_color="inverse")
+    c[2].metric("Facturas con saldo", opt["n"])
+    monto = st.number_input("Monto a abonar", min_value=0.0, max_value=float(saldo_total),
+                            step=10000.0, key="abp_monto")
 
     facs = core.facturas_pagables_proveedor(con, nit, empresa)
     plan, aplicado, remanente, _ = core.distribuir_abono(facs, monto)
-    st.markdown("**Vista previa de distribucion** (mas vencidas primero)")
-    if plan:
+    abono_by = {f["llave_unica"]: ap for f, ap in plan}
+    st.markdown("**Facturas del proveedor y distribucion del abono** (mas vencidas primero)")
+    if facs:
         prev = pd.DataFrame([{
             "N factura": f["numero_factura"], "Vencimiento": f["fecha_vencimiento"] or "-",
-            "Antiguedad": f["cubeta"], "Saldo": f["saldo_tesoreria"], "Abono": ap,
-            "Saldo restante": round(f["saldo_tesoreria"] - ap, 2),
-        } for f, ap in plan])
+            "Antiguedad": f["cubeta"], "Saldo": f["saldo_tesoreria"],
+            "Saldo vencido": f["saldo_tesoreria"] if f["vencida"] else 0,
+            "Abono": abono_by.get(f["llave_unica"], 0),
+            "Saldo restante": round(f["saldo_tesoreria"] - abono_by.get(f["llave_unica"], 0), 2),
+        } for f in facs])
         st.dataframe(prev, use_container_width=True, hide_index=True,
                      column_config={col: st.column_config.NumberColumn(format="$ %d")
-                                    for col in ["Saldo", "Abono", "Saldo restante"]})
-        cap = f"Se aplicaran **{money(aplicado)}** a {len(plan)} factura(s)."
-        if remanente > 0:
-            cap += f" Sobrante no aplicable (excede el saldo total): {money(remanente)}."
-        st.caption(cap)
+                                    for col in ["Saldo", "Saldo vencido", "Abono", "Saldo restante"]})
+        if monto > 0:
+            cap = f"Se aplicaran **{money(aplicado)}** a {len(plan)} factura(s)."
+            if remanente > 0:
+                cap += f" Sobrante no aplicable (excede el saldo total): {money(remanente)}."
+            st.caption(cap)
+        else:
+            st.caption("Ingresa un monto mayor a cero para ver la distribucion del abono.")
     else:
-        st.caption("Ingresa un monto mayor a cero para ver la distribucion.")
+        st.caption("El proveedor no tiene facturas con saldo pendiente.")
 
     with st.form("abono_prov"):
         st.markdown("**Datos del pago**")
