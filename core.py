@@ -604,10 +604,12 @@ def dashboard_data(con):
     facturas = list_facturas(con)
     total_pagado = con.execute("SELECT COALESCE(SUM(valor_pagado),0) v FROM pago").fetchone()["v"]
     activas = [f for f in facturas if f["estado"] != "Anulada"]
-    total_cxp = sum(f["saldo_tesoreria"] for f in activas)
-    total_abonado = sum(f["total_abonado"] for f in facturas if f["estado"] == "Abonada parcialmente")
-    total_pendiente = sum(f["saldo_tesoreria"] for f in facturas
-                          if f["estado"] in ("Pendiente", "En proceso"))
+    # Total cuentas por pagar = total bruto de la obligacion (valor original).
+    total_cxp = sum(f["valor_original"] for f in activas)
+    # Total pendiente = total cuentas por pagar - total pagado.
+    total_pendiente = round(total_cxp - total_pagado, 2)
+    # Anticipo disponible (saldo a favor neto de proveedores).
+    total_anticipo = con.execute("SELECT COALESCE(SUM(valor),0) v FROM anticipo").fetchone()["v"]
     vencidas = [f for f in activas if f["vencida"]]
     por_vencer = [f for f in facturas
                   if f["cubeta"] == "Corriente" and f["estado"] not in ("Pagada", "Anulada")]
@@ -628,7 +630,7 @@ def dashboard_data(con):
         empresas[f["empresa"]] = round(empresas.get(f["empresa"], 0) + f["saldo_tesoreria"], 2)
     kpis = dict(
         total_cxp=round(total_cxp, 2), total_pagado=round(total_pagado, 2),
-        total_abonado=round(total_abonado, 2), total_pendiente=round(total_pendiente, 2),
+        total_anticipo=round(total_anticipo, 2), total_pendiente=round(total_pendiente, 2),
         n_facturas=len(activas), n_vencidas=len(vencidas),
         monto_vencido=round(sum(f["saldo_tesoreria"] for f in vencidas), 2),
         n_por_vencer=len(por_vencer),
