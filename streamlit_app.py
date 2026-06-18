@@ -174,14 +174,12 @@ def _abono_por_proveedor(con):
     if facs:
         prev = pd.DataFrame([{
             "N factura": f["numero_factura"], "Vencimiento": f["fecha_vencimiento"] or "-",
-            "Antiguedad": f["cubeta"], "Saldo": f["saldo_tesoreria"],
-            "Saldo vencido": f["saldo_tesoreria"] if f["vencida"] else 0,
-            "Abono": abono_by.get(f["llave_unica"], 0),
-            "Saldo restante": round(f["saldo_tesoreria"] - abono_by.get(f["llave_unica"], 0), 2),
+            "Antiguedad": f["cubeta"], "Saldo": money(f["saldo_tesoreria"]),
+            "Saldo vencido": money(f["saldo_tesoreria"] if f["vencida"] else 0),
+            "Abono": money(abono_by.get(f["llave_unica"], 0)),
+            "Saldo restante": money(round(f["saldo_tesoreria"] - abono_by.get(f["llave_unica"], 0), 2)),
         } for f in facs])
-        st.dataframe(prev, use_container_width=True, hide_index=True,
-                     column_config={col: st.column_config.NumberColumn(format="$ %d")
-                                    for col in ["Saldo", "Saldo vencido", "Abono", "Saldo restante"]})
+        st.dataframe(prev, use_container_width=True, hide_index=True)
         if monto > 0:
             cap = f"Se aplicaran **{money(aplicado)}** a {len(plan)} factura(s)."
             if remanente > 0:
@@ -233,13 +231,11 @@ def _estado_proveedor(con):
 
     df = pd.DataFrame([{
         "Proveedor": p["proveedor"], "NIT": p["nit"], "Facturas": p["n"],
-        "Cartera total": p["saldo"], "Vencido": p.get("vencido", 0),
+        "Cartera total": money(p["saldo"]), "Vencido": money(p.get("vencido", 0)),
         "% vencido": round(p.get("vencido", 0) / p["saldo"] * 100, 1) if p["saldo"] else 0.0,
         "Estado": "En mora" if p.get("vencido", 0) > 0 else "Al dia",
     } for p in provs])
     st.dataframe(df, use_container_width=True, hide_index=True, column_config={
-        "Cartera total": st.column_config.NumberColumn(format="$ %d"),
-        "Vencido": st.column_config.NumberColumn(format="$ %d"),
         "% vencido": st.column_config.NumberColumn(format="%.1f%%"),
     })
 
@@ -388,15 +384,10 @@ elif pagina == "Facturas":
             df = pd.DataFrame([{
                 "ID": i["id"], "Empresa": i["empresa"], "Proveedor": i["proveedor"],
                 "N factura": i["numero_factura"], "Vencimiento": i["fecha_vencimiento"] or "-",
-                "Antiguedad": i["cubeta"], "Saldo contable": i["saldo_contable"],
-                "Saldo tesoreria": i["saldo_tesoreria"], "Estado": i["estado"],
+                "Antiguedad": i["cubeta"], "Saldo contable": money(i["saldo_contable"]),
+                "Saldo tesoreria": money(i["saldo_tesoreria"]), "Estado": i["estado"],
             } for i in items])
-            st.dataframe(
-                df, use_container_width=True, hide_index=True,
-                column_config={
-                    "Saldo contable": st.column_config.NumberColumn(format="$ %d"),
-                    "Saldo tesoreria": st.column_config.NumberColumn(format="$ %d"),
-                })
+            st.dataframe(df, use_container_width=True, hide_index=True)
             st.write("---")
             ids = [i["id"] for i in items]
             fid = st.selectbox("Abrir factura (ID)", ids,
