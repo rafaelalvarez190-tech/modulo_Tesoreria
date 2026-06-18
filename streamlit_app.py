@@ -159,14 +159,19 @@ def _abono_por_proveedor(con):
     nit, saldo_total = opt["nit"], opt["saldo"]
 
     vencido_total = opt.get("vencido", 0.0)
-    c = st.columns(3)
+    anticipo_total = core.saldo_anticipo_proveedor(con, nit)
+    c = st.columns(4)
     c[0].metric("Saldo total del proveedor", money(saldo_total))
     c[1].metric("Saldo total vencido", money(vencido_total),
                 f"{(vencido_total / saldo_total * 100):.0f}% del saldo" if saldo_total else None,
                 delta_color="inverse")
-    c[2].metric("Facturas con saldo", opt["n"])
-    monto = st.number_input("Monto a abonar (si excede el saldo total, el excedente va a anticipo)",
-                            min_value=0.0, step=10000.0, key="abp_monto")
+    c[2].metric("Saldo anticipo a proveedor", money(anticipo_total))
+    c[3].metric("Facturas con saldo", opt["n"])
+    monto_str = st.text_input("Monto a abonar (si excede el saldo total, el excedente va a anticipo)",
+                              placeholder="Ej: 1.000.000", key="abp_monto")
+    monto = core.to_float(monto_str)
+    if monto_str.strip():
+        st.caption("Monto a aplicar: " + money(monto))
 
     facs = core.facturas_pagables_proveedor(con, nit, empresa)
     plan, aplicado, remanente, _ = core.distribuir_abono(facs, monto)
