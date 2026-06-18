@@ -100,8 +100,9 @@ def _detalle_factura(con, fid):
             with st.form("pago"):
                 cc = st.columns(2)
                 fecha_pago = cc[0].date_input("Fecha de pago *", value=dt.date.today(), format="YYYY-MM-DD")
-                valor = cc[1].number_input(f"Valor pagado * (max {f['saldo_tesoreria']:,.0f})",
-                                           min_value=0.0, max_value=float(f["saldo_tesoreria"]), step=1000.0)
+                valor = cc[1].number_input(
+                    f"Valor pagado * (saldo {money(f['saldo_tesoreria'])}; el excedente va a anticipo)",
+                    min_value=0.0, step=1000.0)
                 banco = cc[0].text_input("Banco *", placeholder="Bancolombia, Davivienda...")
                 cuenta = cc[1].text_input("Cuenta bancaria *")
                 medio = cc[0].selectbox("Medio de pago *", core.MEDIOS_PAGO)
@@ -164,8 +165,8 @@ def _abono_por_proveedor(con):
                 f"{(vencido_total / saldo_total * 100):.0f}% del saldo" if saldo_total else None,
                 delta_color="inverse")
     c[2].metric("Facturas con saldo", opt["n"])
-    monto = st.number_input("Monto a abonar", min_value=0.0, max_value=float(saldo_total),
-                            step=10000.0, key="abp_monto")
+    monto = st.number_input("Monto a abonar (si excede el saldo total, el excedente va a anticipo)",
+                            min_value=0.0, step=10000.0, key="abp_monto")
 
     facs = core.facturas_pagables_proveedor(con, nit, empresa)
     plan, aplicado, remanente, _ = core.distribuir_abono(facs, monto)
@@ -183,7 +184,7 @@ def _abono_por_proveedor(con):
         if monto > 0:
             cap = f"Se aplicaran **{money(aplicado)}** a {len(plan)} factura(s)."
             if remanente > 0:
-                cap += f" Sobrante no aplicable (excede el saldo total): {money(remanente)}."
+                cap += f" Excedente {money(remanente)} -> se registrara como anticipo del proveedor."
             st.caption(cap)
         else:
             st.caption("Ingresa un monto mayor a cero para ver la distribucion del abono.")
@@ -238,6 +239,36 @@ def _estado_proveedor(con):
     st.dataframe(df, use_container_width=True, hide_index=True, column_config={
         "% vencido": st.column_config.NumberColumn(format="%.1f%%"),
     })
+
+
+def _anticipos(con):
+    """Saldo de anticipo (saldo a favor) por proveedor."""
+    st.markdown("Saldos **a favor** (anticipos) generados cuando un pago o abono **excede** lo adeudado "
+                "al proveedor. El excedente queda aqui como saldo del proveedor.")
+    empresa = st.selectbox("Empresa (opcional)", [""] + core.empresas_distintas(con),
+                           format_func=lambda x: "Todas" if x == "" else x, key="ant_emp")
+    resumen = core.anticipos_resumen(con, empresa)
+    total = round(sum(a["saldo"] for a in resumen), 2)
+    c = st.columns(2)
+    c[0].metric("Proveedores con anticipo", len(resumen))
+    c[1].metric("Total anticipos", money(total))
+    if resumen:
+        df = pd.DataFrame([{
+            "Proveedor": a["proveedor"], "NIT": a["nit"],
+            "Saldo anticipo": money(a["saldo"]), "Movimientos": a["movimientos"],
+        } for a in resumen])
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        opts = {f"{a['proveedor']} (NIT {a['nit']})": a["nit"] for a in resumen}
+        sel = st.selectbox("Ver movimientos de:", list(opts.keys()), key="ant_sel")
+        movs = core.anticipos_movimientos(con, opts[sel])
+        if movs:
+            st.markdown("**Movimientos**")
+            st.dataframe(pd.DataFrame([{
+                "Fecha": m["fecha"], "Valor": money(m["valor"]), "Origen": m["origen"],
+                "Comprobante": m["numero_comprobante"], "Usuario": m["usuario"],
+            } for m in movs]), use_container_width=True, hide_index=True)
+    else:
+        st.info("Aun no hay anticipos. Se generan automaticamente al pagar o abonar mas del total adeudado.")
 
 
 # ---- sidebar / navegacion ----
@@ -361,8 +392,8 @@ elif pagina == "Carga masiva":
 # ===============================================================================
 elif pagina == "Facturas":
     st.title("Facturas (Cuentas por pagar)")
-    tab_estado, tab_list, tab_abono = st.tabs(
-        ["Estado del proveedor", "Listado y gestion", "Abono por proveedor"])
+    tab_estado, tab_list, tab_abono, tab_ant = st.tabs(
+        ["Estado del proveedor", "Listado y gestion", "Abono por proveedor", "Saldo anticipo proveedor"])
 
     with tab_estado:
         _estado_proveedor(con)
@@ -398,6 +429,9 @@ elif pagina == "Facturas":
 
     with tab_abono:
         _abono_por_proveedor(con)
+
+    with tab_ant:
+        _anticipos(con)
 
 
 # ===============================================================================
