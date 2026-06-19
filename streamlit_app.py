@@ -227,6 +227,12 @@ def _abono_por_proveedor(con):
         cruce_str = st.text_input("Monto a cruzar (vacio = todo el anticipo disponible)",
                                   placeholder="Ej: 500.000", key="cruce_monto")
         cruce_monto = core.to_float(cruce_str) if cruce_str.strip() else anticipo_total
+        excede = cruce_monto > anticipo_total + 0.001
+        if cruce_str.strip():
+            st.caption("Monto a cruzar: " + money(cruce_monto))
+        if excede:
+            st.error(f"El monto a cruzar ({money(cruce_monto)}) no puede ser mayor al anticipo "
+                     f"disponible ({money(anticipo_total)}). Debe ser menor o igual.")
         tope = round(min(cruce_monto, anticipo_total, saldo_total), 2)
         plan_c, aplic_c, _, _ = core.distribuir_abono(facs, tope)
         cruce_by = {f["llave_unica"]: ap for f, ap in plan_c}
@@ -240,8 +246,8 @@ def _abono_por_proveedor(con):
         st.caption(f"Se cruzaran **{money(aplic_c)}** del anticipo; quedaran "
                    f"{money(round(anticipo_total - aplic_c, 2))} de anticipo.")
         with st.form("form_cruce"):
-            if st.form_submit_button("Aplicar cruce de anticipo", type="primary"):
-                ok, m, res = core.cruzar_anticipo(con, nit, tope, empresa, USUARIO)
+            if st.form_submit_button("Aplicar cruce de anticipo", type="primary", disabled=excede):
+                ok, m, res = core.cruzar_anticipo(con, nit, cruce_monto, empresa, USUARIO)
                 (st.success if ok else st.error)(m)
                 if ok:
                     st.rerun()
