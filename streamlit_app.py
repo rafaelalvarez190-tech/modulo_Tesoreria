@@ -315,9 +315,19 @@ with st.sidebar:
                 "<div style='color:#666;font-size:13px;margin-top:-6px'>Tesoreria Integral - CxP</div>",
                 unsafe_allow_html=True)
     st.write("")
+    st.markdown(
+        "<div style='color:#1f3864;font-weight:700;font-size:12px;"
+        "text-transform:uppercase;letter-spacing:.5px'>Seguimiento y control de cuentas por pagar</div>",
+        unsafe_allow_html=True)
     pagina = st.radio("Navegacion",
                       ["Dashboard", "Carga masiva", "Facturas", "Pagos"],
                       label_visibility="collapsed")
+    st.write("")
+    st.markdown(
+        "<div style='color:#9aa5b1;font-weight:700;font-size:12px;"
+        "text-transform:uppercase;letter-spacing:.5px'>Archivos planos bancos</div>",
+        unsafe_allow_html=True)
+    st.caption("Proximamente (otro proyecto)")
     st.write("---")
     st.caption(f"Usuario: **{USUARIO}**")
     n = con.execute("SELECT COUNT(*) n FROM factura WHERE activo=1").fetchone()["n"]
