@@ -202,13 +202,11 @@ def _abono_por_proveedor(con):
         st.markdown("**Datos del pago**")
         cc = st.columns(2)
         fecha_pago = cc[0].date_input("Fecha de pago *", value=dt.date.today(), format="YYYY-MM-DD")
-        banco = cc[1].text_input("Banco *", placeholder="Bancolombia, Davivienda...")
-        cuenta = cc[0].text_input("Cuenta bancaria *")
         medio = cc[1].selectbox("Medio de pago *", core.MEDIOS_PAGO)
         comprobante = cc[0].text_input("N comprobante *")
         notas = cc[1].text_input("Notas")
         if st.form_submit_button("Registrar abono por proveedor", type="primary"):
-            datos = dict(fecha_pago=fecha_pago.isoformat(), banco=banco, cuenta_bancaria=cuenta,
+            datos = dict(fecha_pago=fecha_pago.isoformat(), banco="", cuenta_bancaria="",
                          medio_pago=medio, numero_comprobante=comprobante, notas=notas)
             ok, m, res = core.abono_por_proveedor(con, nit, monto, datos, empresa, USUARIO)
             (st.success if ok else st.error)(m)
