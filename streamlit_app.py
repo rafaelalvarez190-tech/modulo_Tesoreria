@@ -487,16 +487,23 @@ elif pagina == "Facturas":
 # ===============================================================================
 elif pagina == "Pagos":
     st.title("Pagos registrados")
-    pagos = core.todos_los_pagos(con)
-    total = sum((p["valor_pagado"] or 0) for p in pagos)
-    st.caption(f"{len(pagos)} pagos - total: **{money(total)}**")
-    if pagos:
+    st.caption("Incluye los pagos aplicados a facturas y los montos que se fueron a anticipo "
+               "(ambos son salida de caja). Los cruces de anticipo se muestran como aplicacion, "
+               "no como caja nueva.")
+    movs = core.movimientos_pago(con)
+    total_caja = core.total_caja_pagada(con)
+    n_caja = sum(1 for m in movs if m["es_caja"])
+    c1, c2 = st.columns(2)
+    c1.metric("Total pagado (caja)", money(total_caja))
+    c2.metric("Movimientos de caja", n_caja)
+    if movs:
         df = pd.DataFrame([{
-            "Fecha": p["fecha_pago"], "Empresa": p["empresa"], "Proveedor": p["proveedor"],
-            "N factura": p["numero_factura"], "Medio": p["medio_pago"], "Banco": p["banco"],
-            "Comprobante": p["numero_comprobante"], "Valor": p["valor_pagado"],
-        } for p in pagos])
-        st.dataframe(df, use_container_width=True, hide_index=True,
-                     column_config={"Valor": st.column_config.NumberColumn(format="$ %d")})
+            "Fecha": m["fecha"], "Tipo": m["tipo"], "Empresa": m["empresa"],
+            "Proveedor": m["proveedor"], "Referencia": m["referencia"], "Medio": m["medio"],
+            "Comprobante": m["comprobante"], "Valor": money(m["valor"]),
+        } for m in movs])
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.caption("Tipos: **Pago a factura** y **A anticipo** suman a la caja; "
+                   "**Aplicacion de anticipo** (cruce) usa anticipo ya pagado.")
     else:
         st.info("Aun no hay pagos registrados.")
