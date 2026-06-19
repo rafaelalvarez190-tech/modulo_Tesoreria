@@ -97,7 +97,7 @@ def _detalle_factura(con, fid):
         elif f["saldo_tesoreria"] <= 0:
             st.caption("La factura ya esta pagada (saldo 0).")
         else:
-            with st.form("pago"):
+            with st.form("pago", clear_on_submit=True):
                 cc = st.columns(2)
                 fecha_pago = cc[0].date_input("Fecha de pago *", value=dt.date.today(), format="YYYY-MM-DD")
                 valor = cc[1].number_input(
@@ -144,6 +144,10 @@ def _detalle_factura(con, fid):
 
 def _abono_por_proveedor(con):
     """Abono a nivel de proveedor: se reparte entre sus facturas mas vencidas primero."""
+    # limpiar campos de monto tras un registro exitoso
+    if st.session_state.pop("abp_clear", False):
+        st.session_state["abp_monto"] = ""
+        st.session_state["cruce_monto"] = ""
     st.markdown("Aplica un abono a un **proveedor**; el sistema lo distribuye automaticamente "
                 "entre sus facturas **de la mas vencida a la menos vencida**, sin exceder el saldo total.")
     empresa = st.selectbox("Empresa (opcional)", [""] + core.empresas_distintas(con),
@@ -196,7 +200,7 @@ def _abono_por_proveedor(con):
     else:
         st.caption("El proveedor no tiene facturas con saldo pendiente.")
 
-    with st.form("abono_prov"):
+    with st.form("abono_prov", clear_on_submit=True):
         st.markdown("**Datos del pago**")
         cc = st.columns(2)
         fecha_pago = cc[0].date_input("Fecha de pago *", value=dt.date.today(), format="YYYY-MM-DD")
@@ -211,6 +215,7 @@ def _abono_por_proveedor(con):
             ok, m, res = core.abono_por_proveedor(con, nit, monto, datos, empresa, USUARIO)
             (st.success if ok else st.error)(m)
             if ok:
+                st.session_state["abp_clear"] = True
                 st.rerun()
 
     # ---- Cruce de anticipo ----
@@ -250,6 +255,7 @@ def _abono_por_proveedor(con):
                 ok, m, res = core.cruzar_anticipo(con, nit, cruce_monto, empresa, USUARIO)
                 (st.success if ok else st.error)(m)
                 if ok:
+                    st.session_state["abp_clear"] = True
                     st.rerun()
 
 
