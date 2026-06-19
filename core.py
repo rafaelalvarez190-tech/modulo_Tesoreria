@@ -345,6 +345,43 @@ def todos_los_pagos(con):
         "JOIN factura f ON f.id=p.factura_id ORDER BY p.id DESC").fetchall()]
 
 
+def movimientos_pago(con):
+    """Vista unificada de pagos de caja: pagos a facturas, montos que se fueron a anticipo
+    (excedentes) y aplicaciones de anticipo (cruces). El total de caja suma pagos a factura
+    y excedentes a anticipo (los cruces son aplicacion de anticipo ya pagado, no caja nueva)."""
+    rows = []
+    for p in con.execute(
+            "SELECT p.*, f.numero_factura, f.proveedor FROM pago p JOIN factura f ON f.id=p.factura_id "
+            "ORDER BY p.id DESC").fetchall():
+        es_cruce = (p["medio_pago"] == "Cruce de anticipo")
+        rows.append(dict(
+            fecha=p["fecha_pago"], empresa=p["empresa"], proveedor=p["proveedor"],
+            referencia="Factura " + str(p["numero_factura"]), medio=p["medio_pago"],
+            comprobante=p["numero_comprobante"], valor=p["valor_pagado"], usuario=p["usuario"],
+            tipo="Aplicacion de anticipo" if es_cruce else "Pago a factura",
+            es_caja=(not es_cruce)))
+    for a in con.execute(
+            "SELECT * FROM anticipo WHERE valor > 0 AND origen LIKE 'Excedente%' "
+            "ORDER BY id DESC").fetchall():
+        rows.append(dict(
+            fecha=a["fecha"], empresa=a["empresa"], proveedor=a["proveedor"],
+            referencia=a["origen"], medio="-", comprobante=a["numero_comprobante"],
+            valor=a["valor"], usuario=a["usuario"], tipo="A anticipo", es_caja=True))
+    # completar proveedor de las filas de pago
+    rows.sort(key=lambda x: str(x["fecha"]), reverse=True)
+    return rows
+
+
+def total_caja_pagada(con):
+    pago = con.execute(
+        "SELECT COALESCE(SUM(valor_pagado),0) v FROM pago WHERE medio_pago <> 'Cruce de anticipo'"
+    ).fetchone()["v"]
+    antic = con.execute(
+        "SELECT COALESCE(SUM(valor),0) v FROM anticipo WHERE valor > 0 AND origen LIKE 'Excedente%'"
+    ).fetchone()["v"]
+    return round(pago + antic, 2)
+
+
 def registrar_pago(con, fid, datos, usuario="demo"):
     r = con.execute("SELECT * FROM factura WHERE id=?", (fid,)).fetchone()
     if not r:
@@ -527,6 +564,9 @@ def cruzar_anticipo(con, nit, monto, empresa="", usuario="demo"):
     monto = to_float(monto)
     if monto <= 0:
         monto = disponible  # por defecto, cruzar todo el disponible
+    if monto > disponible + 0.001:
+        return False, ("El monto a cruzar ({:,.0f}) no puede ser mayor al anticipo disponible "
+                       "({:,.0f}).".format(monto, disponible)), None
     facturas = facturas_pagables_proveedor(con, nit, empresa)
     if not facturas:
         return False, "El proveedor no tiene facturas con saldo para cruzar.", None
