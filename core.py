@@ -435,7 +435,8 @@ def registrar_pago(con, fid, datos, usuario="demo"):
     if excedente > 0:
         registrar_anticipo(con, r["empresa"], r["identificacion"], r["proveedor"], excedente,
                            "Excedente de pago factura " + str(r["numero_factura"]),
-                           datos.get("numero_comprobante", ""), usuario)
+                           datos.get("numero_comprobante", ""), usuario,
+                           fecha=str(datos.get("fecha_pago") or today().isoformat()))
     con.commit()
     msg = "Pago registrado por {:,.0f}. Saldo de tesoreria: {:,.0f}.".format(aplicado, max(saldo_tes, 0))
     if excedente > 0:
@@ -523,7 +524,8 @@ def abono_por_proveedor(con, nit, monto, datos, empresa="", usuario="demo"):
         emp = empresa or facturas[0]["empresa"]
         registrar_anticipo(con, emp, nit, prov_name, remanente,
                            "Excedente de abono por proveedor",
-                           datos.get("numero_comprobante", ""), usuario)
+                           datos.get("numero_comprobante", ""), usuario,
+                           fecha=str(datos.get("fecha_pago") or today().isoformat()))
     resumen = dict(n=len(detalle), aplicado=round(aplicado, 2), remanente=round(remanente, 2),
                    anticipo=round(remanente, 2) if remanente > 0 else 0,
                    saldo_total=saldo_total, detalle=detalle)
@@ -533,11 +535,11 @@ def abono_por_proveedor(con, nit, monto, datos, empresa="", usuario="demo"):
     return True, msg, resumen
 
 
-def registrar_anticipo(con, empresa, nit, proveedor, valor, origen, comprobante="", usuario="demo"):
+def registrar_anticipo(con, empresa, nit, proveedor, valor, origen, comprobante="", usuario="demo", fecha=None):
     con.execute(
         "INSERT INTO anticipo (empresa, identificacion, proveedor, fecha, valor, origen,"
         " numero_comprobante, usuario, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-        (empresa, nit, proveedor, today().isoformat(), round(float(valor), 2),
+        (empresa, nit, proveedor, (fecha or today().isoformat()), round(float(valor), 2),
          origen, comprobante, usuario, now()))
     con.commit()
 
@@ -771,10 +773,18 @@ def dashboard_data(con):
     estados_count = {e: 0 for e in ESTADOS}
     for f in facturas:
         estados_count[f["estado"]] = estados_count.get(f["estado"], 0) + 1
-    flujo = con.execute(
-        "SELECT substr(fecha_pago,1,10) d, SUM(valor_pagado) v FROM pago "
-        "GROUP BY substr(fecha_pago,1,10) ORDER BY d").fetchall()
-    flujo = [(r["d"], round(r["v"], 2)) for r in flujo]
+    flujo_map = {}
+    for r in con.execute(
+            "SELECT substr(fecha_pago,1,10) d, SUM(valor_pagado) v FROM pago "
+            "WHERE anulado=0 AND medio_pago <> 'Cruce de anticipo' "
+            "GROUP BY substr(fecha_pago,1,10)").fetchall():
+        flujo_map[r["d"]] = flujo_map.get(r["d"], 0) + (r["v"] or 0)
+    for r in con.execute(
+            "SELECT substr(fecha,1,10) d, SUM(valor) v FROM anticipo "
+            "WHERE anulado=0 AND valor > 0 AND origen LIKE 'Excedente%' "
+            "GROUP BY substr(fecha,1,10)").fetchall():
+        flujo_map[r["d"]] = flujo_map.get(r["d"], 0) + (r["v"] or 0)
+    flujo = [(d, round(flujo_map[d], 2)) for d in sorted(flujo_map)]
     empresas = {}
     for f in activas:
         empresas[f["empresa"]] = round(empresas.get(f["empresa"], 0) + f["saldo_tesoreria"], 2)
