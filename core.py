@@ -85,6 +85,13 @@ CREATE TABLE IF NOT EXISTS anticipo (
     fecha TEXT, valor REAL, origen TEXT, numero_comprobante TEXT,
     usuario TEXT, created_at TEXT, anulado INTEGER DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS anulacion (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    comprobante TEXT, empresa TEXT, identificacion TEXT, proveedor TEXT,
+    tipo TEXT, valor_facturas REAL, valor_anticipo REAL,
+    n_pagos INTEGER, n_anticipos INTEGER,
+    fecha TEXT, usuario TEXT, motivo TEXT
+);
 """
 
 
@@ -649,6 +656,25 @@ def anular_comprobante(con, comprobante, usuario="demo", motivo="Anulacion de pa
                          (comprobante,)).fetchall()
     if not pagos and not antics:
         return False, "No hay movimientos activos con ese comprobante."
+    # datos resumen para el historico de anulaciones
+    es_cruce = any(p["medio_pago"] == "Cruce de anticipo" for p in pagos)
+    val_fact = round(sum((p["valor_pagado"] or 0) for p in pagos), 2)
+    val_ant = round(sum((a["valor"] or 0) for a in antics if (a["valor"] or 0) > 0), 2)
+    empresa = identificacion = proveedor = ""
+    if pagos:
+        fr = con.execute("SELECT empresa, identificacion, proveedor FROM factura WHERE id=?",
+                         (pagos[0]["factura_id"],)).fetchone()
+        if fr:
+            empresa, identificacion, proveedor = fr["empresa"], fr["identificacion"], fr["proveedor"]
+    elif antics:
+        empresa, identificacion, proveedor = antics[0]["empresa"], antics[0]["identificacion"], antics[0]["proveedor"]
+    con.execute(
+        "INSERT INTO anulacion (comprobante, empresa, identificacion, proveedor, tipo,"
+        " valor_facturas, valor_anticipo, n_pagos, n_anticipos, fecha, usuario, motivo)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (comprobante, empresa, identificacion, proveedor,
+         "Cruce de anticipo" if es_cruce else "Pago", val_fact, val_ant,
+         len(pagos), len(antics), now(), usuario, motivo))
     for p in pagos:
         r = con.execute("SELECT * FROM factura WHERE id=?", (p["factura_id"],)).fetchone()
         if r:
@@ -672,6 +698,11 @@ def anular_comprobante(con, comprobante, usuario="demo", motivo="Anulacion de pa
     con.commit()
     return True, ("Comprobante {} anulado: {} pago(s) y {} mov. de anticipo revertidos. "
                   "Saldos restablecidos.".format(comprobante, len(pagos), len(antics)))
+
+
+def anulaciones_historico(con):
+    return [dict(r) for r in con.execute(
+        "SELECT * FROM anulacion ORDER BY id DESC").fetchall()]
 
 
 def cambiar_estado(con, fid, nuevo, motivo="", usuario="demo"):
@@ -713,7 +744,7 @@ def cargas_recientes(con, limit=20):
 
 
 def reset_db(con):
-    for t in ("pago", "anticipo", "error_carga", "historial_cambio", "carga_archivo", "factura"):
+    for t in ("pago", "anticipo", "anulacion", "error_carga", "historial_cambio", "carga_archivo", "factura"):
         con.execute("DELETE FROM " + t)
     con.commit()
 
