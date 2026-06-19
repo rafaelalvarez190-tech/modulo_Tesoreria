@@ -332,7 +332,7 @@ with st.sidebar:
         "text-transform:uppercase;letter-spacing:.5px'>Seguimiento y control de cuentas por pagar</div>",
         unsafe_allow_html=True)
     pagina = st.radio("Navegacion",
-                      ["Dashboard", "Carga masiva", "Facturas", "Pagos", "Anulaciones"],
+                      ["Carga masiva", "Dashboard", "Facturas", "Pagos", "Anulaciones"],
                       label_visibility="collapsed")
     st.write("")
     st.markdown(
