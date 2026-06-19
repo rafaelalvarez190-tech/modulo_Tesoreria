@@ -720,7 +720,8 @@ def reset_db(con):
 
 def dashboard_data(con):
     facturas = list_facturas(con)
-    total_pagado = con.execute("SELECT COALESCE(SUM(valor_pagado),0) v FROM pago").fetchone()["v"]
+    total_pagado = con.execute(
+        "SELECT COALESCE(SUM(valor_pagado),0) v FROM pago WHERE anulado=0").fetchone()["v"]
     activas = [f for f in facturas if f["estado"] != "Anulada"]
     # Total cuentas por pagar = total bruto de la obligacion (valor original).
     total_cxp = sum(f["valor_original"] for f in activas)
