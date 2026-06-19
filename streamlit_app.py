@@ -366,8 +366,8 @@ if pagina == "Dashboard":
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Total cuentas por pagar", money(k["total_cxp"]), f"{k['n_facturas']} facturas")
         c2.metric("Total pendiente", money(k["total_pendiente"]))
-        c3.metric("Total pagado", money(k["total_pagado"]))
-        c4.metric("Total anticipo disponible", money(k["total_anticipo"]))
+        c3.metric("Total pagado a cartera", money(k["total_pagado"]))
+        c4.metric("Total pagado a anticipo disponible", money(k["total_anticipo"]))
         c5, c6 = st.columns(2)
         c5.metric("Facturas vencidas", k["n_vencidas"], f"{money(k['monto_vencido'])} en mora",
                   delta_color="inverse")
