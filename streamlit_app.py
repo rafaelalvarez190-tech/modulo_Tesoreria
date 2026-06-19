@@ -487,23 +487,41 @@ elif pagina == "Facturas":
 # ===============================================================================
 elif pagina == "Pagos":
     st.title("Pagos registrados")
-    st.caption("Incluye los pagos aplicados a facturas y los montos que se fueron a anticipo "
-               "(ambos son salida de caja). Los cruces de anticipo se muestran como aplicacion, "
-               "no como caja nueva.")
-    movs = core.movimientos_pago(con)
+    st.caption("Registros agrupados por **numero de comprobante** (un comprobante = una operacion). "
+               "Incluye lo aplicado a facturas y lo que se fue a anticipo. Puedes **anular** un "
+               "comprobante mal registrado: se restablecen los saldos de cartera, anticipo y cruce.")
+    grupos = core.comprobantes_resumen(con)
     total_caja = core.total_caja_pagada(con)
-    n_caja = sum(1 for m in movs if m["es_caja"])
     c1, c2 = st.columns(2)
     c1.metric("Total pagado (caja)", money(total_caja))
-    c2.metric("Movimientos de caja", n_caja)
-    if movs:
+    c2.metric("Comprobantes", len(grupos))
+    if grupos:
         df = pd.DataFrame([{
-            "Fecha": m["fecha"], "Tipo": m["tipo"], "Empresa": m["empresa"],
-            "Proveedor": m["proveedor"], "Referencia": m["referencia"], "Medio": m["medio"],
-            "Comprobante": m["comprobante"], "Valor": money(m["valor"]),
-        } for m in movs])
+            "Comprobante": g["comprobante"], "Fecha": g["fecha"], "Empresa": g["empresa"],
+            "Proveedor": g["proveedor"], "Facturas": g["n_facturas"],
+            "Aplicado a facturas": money(g["valor_facturas"]),
+            "A anticipo": money(g["valor_anticipo"]),
+            "Tipo": "Cruce de anticipo" if g["es_cruce"] else "Pago",
+            "Total caja": money(g["total"]),
+        } for g in grupos])
         st.dataframe(df, use_container_width=True, hide_index=True)
-        st.caption("Tipos: **Pago a factura** y **A anticipo** suman a la caja; "
-                   "**Aplicacion de anticipo** (cruce) usa anticipo ya pagado.")
+
+        st.write("---")
+        st.markdown("**Anular un comprobante**")
+        st.caption("Selecciona el comprobante mal registrado. Al anular, las facturas vuelven a su "
+                   "saldo anterior y el anticipo/cruce se revierte.")
+        comps = [g["comprobante"] for g in grupos]
+        col1, col2 = st.columns([2, 3])
+        sel = col1.selectbox("Comprobante", comps, key="anular_sel")
+        motivo = col2.text_input("Motivo de la anulacion", key="anular_motivo")
+        gsel = next((g for g in grupos if g["comprobante"] == sel), None)
+        if gsel:
+            st.caption(f"Proveedor: {gsel['proveedor']} - aplicado a facturas: "
+                       f"{money(gsel['valor_facturas'])} - a anticipo: {money(gsel['valor_anticipo'])}")
+        if st.button("Anular comprobante", type="primary"):
+            ok, m = core.anular_comprobante(con, sel, USUARIO, motivo or "Anulacion de pago")
+            (st.success if ok else st.error)(m)
+            if ok:
+                st.rerun()
     else:
         st.info("Aun no hay pagos registrados.")
