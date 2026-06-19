@@ -36,7 +36,7 @@ TRANSICIONES = {
     "Anulada": ["Pendiente"],
 }
 
-MEDIOS_PAGO = ["Transferencia", "Cheque", "Efectivo", "PSE", "Debito automatico"]
+MEDIOS_PAGO = ["Transferencia", "Caja", "Efectivo", "PSE", "Debito automatico"]
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS factura (
@@ -409,9 +409,9 @@ def registrar_pago(con, fid, datos, usuario="demo"):
     valor = to_float(datos.get("valor_pagado"))
     if valor <= 0:
         return False, "El valor del pago debe ser mayor a cero."
-    for k in ("fecha_pago", "banco", "cuenta_bancaria", "medio_pago", "numero_comprobante"):
+    for k in ("fecha_pago", "medio_pago", "numero_comprobante"):
         if not str(datos.get(k) or "").strip():
-            return False, "Faltan datos obligatorios del pago (fecha, banco, cuenta, medio, comprobante)."
+            return False, "Faltan datos obligatorios del pago (fecha, medio de pago, comprobante)."
     # El excedente sobre el saldo de la factura se lleva a anticipo del proveedor.
     aplicado = round(min(valor, f["saldo_tesoreria"]), 2)
     excedente = round(valor - aplicado, 2)
