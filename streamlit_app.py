@@ -326,7 +326,7 @@ with st.sidebar:
         "text-transform:uppercase;letter-spacing:.5px'>Seguimiento y control de cuentas por pagar</div>",
         unsafe_allow_html=True)
     pagina = st.radio("Navegacion",
-                      ["Dashboard", "Carga masiva", "Facturas", "Pagos"],
+                      ["Dashboard", "Carga masiva", "Facturas", "Pagos", "Anulaciones"],
                       label_visibility="collapsed")
     st.write("")
     st.markdown(
@@ -531,3 +531,25 @@ elif pagina == "Pagos":
                 st.rerun()
     else:
         st.info("Aun no hay pagos registrados.")
+
+
+elif pagina == "Anulaciones":
+    st.title("Historico de anulaciones")
+    st.caption("Seguimiento de los comprobantes anulados: que se anulo, cuanto, quien y por que. "
+               "Los movimientos anulados ya no afectan saldos ni reportes.")
+    hist = core.anulaciones_historico(con)
+    total = round(sum((h["valor_facturas"] or 0) for h in hist), 2)
+    c1, c2 = st.columns(2)
+    c1.metric("Comprobantes anulados", len(hist))
+    c2.metric("Valor anulado (aplicado a facturas)", money(total))
+    if hist:
+        df = pd.DataFrame([{
+            "Fecha anulacion": h["fecha"], "Comprobante": h["comprobante"], "Tipo": h["tipo"],
+            "Empresa": h["empresa"], "Proveedor": h["proveedor"],
+            "Valor facturas": money(h["valor_facturas"]), "Valor anticipo": money(h["valor_anticipo"]),
+            "Pagos": h["n_pagos"], "Mov. anticipo": h["n_anticipos"],
+            "Usuario": h["usuario"], "Motivo": h["motivo"],
+        } for h in hist])
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.info("Aun no se ha anulado ningun comprobante.")
