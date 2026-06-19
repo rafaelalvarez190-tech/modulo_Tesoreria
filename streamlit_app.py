@@ -103,14 +103,12 @@ def _detalle_factura(con, fid):
                 valor = cc[1].number_input(
                     f"Valor pagado * (saldo {money(f['saldo_tesoreria'])}; el excedente va a anticipo)",
                     min_value=0.0, step=1000.0)
-                banco = cc[0].text_input("Banco *", placeholder="Bancolombia, Davivienda...")
-                cuenta = cc[1].text_input("Cuenta bancaria *")
                 medio = cc[0].selectbox("Medio de pago *", core.MEDIOS_PAGO)
                 comprobante = cc[1].text_input("N comprobante *")
                 notas_p = st.text_input("Notas")
                 if st.form_submit_button("Registrar pago", type="primary"):
-                    datos = dict(fecha_pago=fecha_pago.isoformat(), valor_pagado=valor, banco=banco,
-                                 cuenta_bancaria=cuenta, medio_pago=medio,
+                    datos = dict(fecha_pago=fecha_pago.isoformat(), valor_pagado=valor, banco="",
+                                 cuenta_bancaria="", medio_pago=medio,
                                  numero_comprobante=comprobante, notas=notas_p)
                     ok, m = core.registrar_pago(con, fid, datos, USUARIO)
                     (st.success if ok else st.error)(m)
