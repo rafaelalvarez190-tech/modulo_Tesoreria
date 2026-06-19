@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS pago (
     factura_id INTEGER NOT NULL,
     fecha_pago TEXT, empresa TEXT, banco TEXT, cuenta_bancaria TEXT,
     medio_pago TEXT, numero_comprobante TEXT, valor_pagado REAL,
-    notas TEXT, usuario TEXT, created_at TEXT,
+    notas TEXT, usuario TEXT, created_at TEXT, anulado INTEGER DEFAULT 0,
     FOREIGN KEY (factura_id) REFERENCES factura(id)
 );
 CREATE TABLE IF NOT EXISTS carga_archivo (
@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS anticipo (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     empresa TEXT, identificacion TEXT, proveedor TEXT,
     fecha TEXT, valor REAL, origen TEXT, numero_comprobante TEXT,
-    usuario TEXT, created_at TEXT
+    usuario TEXT, created_at TEXT, anulado INTEGER DEFAULT 0
 );
 """
 
@@ -95,8 +95,16 @@ def get_conn(db_path=DB_PATH):
     return con
 
 
+def _ensure_column(con, table, col, decl):
+    cols = [r[1] for r in con.execute("PRAGMA table_info(" + table + ")").fetchall()]
+    if col not in cols:
+        con.execute("ALTER TABLE " + table + " ADD COLUMN " + col + " " + decl)
+
+
 def init_db(con):
     con.executescript(SCHEMA)
+    _ensure_column(con, "pago", "anulado", "INTEGER DEFAULT 0")
+    _ensure_column(con, "anticipo", "anulado", "INTEGER DEFAULT 0")
     con.commit()
 
 
@@ -331,7 +339,7 @@ def empresas_distintas(con):
 
 def pagos_de(con, fid):
     return [dict(r) for r in con.execute(
-        "SELECT * FROM pago WHERE factura_id=? ORDER BY id DESC", (fid,)).fetchall()]
+        "SELECT * FROM pago WHERE factura_id=? AND anulado=0 ORDER BY id DESC", (fid,)).fetchall()]
 
 
 def historial_de(con, fid):
@@ -352,7 +360,7 @@ def movimientos_pago(con):
     rows = []
     for p in con.execute(
             "SELECT p.*, f.numero_factura, f.proveedor FROM pago p JOIN factura f ON f.id=p.factura_id "
-            "ORDER BY p.id DESC").fetchall():
+            "WHERE p.anulado=0 ORDER BY p.id DESC").fetchall():
         es_cruce = (p["medio_pago"] == "Cruce de anticipo")
         rows.append(dict(
             fecha=p["fecha_pago"], empresa=p["empresa"], proveedor=p["proveedor"],
@@ -361,7 +369,7 @@ def movimientos_pago(con):
             tipo="Aplicacion de anticipo" if es_cruce else "Pago a factura",
             es_caja=(not es_cruce)))
     for a in con.execute(
-            "SELECT * FROM anticipo WHERE valor > 0 AND origen LIKE 'Excedente%' "
+            "SELECT * FROM anticipo WHERE anulado=0 AND valor > 0 AND origen LIKE 'Excedente%' "
             "ORDER BY id DESC").fetchall():
         rows.append(dict(
             fecha=a["fecha"], empresa=a["empresa"], proveedor=a["proveedor"],
@@ -374,10 +382,12 @@ def movimientos_pago(con):
 
 def total_caja_pagada(con):
     pago = con.execute(
-        "SELECT COALESCE(SUM(valor_pagado),0) v FROM pago WHERE medio_pago <> 'Cruce de anticipo'"
+        "SELECT COALESCE(SUM(valor_pagado),0) v FROM pago "
+        "WHERE medio_pago <> 'Cruce de anticipo' AND anulado=0"
     ).fetchone()["v"]
     antic = con.execute(
-        "SELECT COALESCE(SUM(valor),0) v FROM anticipo WHERE valor > 0 AND origen LIKE 'Excedente%'"
+        "SELECT COALESCE(SUM(valor),0) v FROM anticipo "
+        "WHERE valor > 0 AND origen LIKE 'Excedente%' AND anulado=0"
     ).fetchone()["v"]
     return round(pago + antic, 2)
 
@@ -526,17 +536,18 @@ def registrar_anticipo(con, empresa, nit, proveedor, valor, origen, comprobante=
 
 
 def saldo_anticipo_proveedor(con, nit):
-    r = con.execute("SELECT COALESCE(SUM(valor),0) v FROM anticipo WHERE identificacion=?",
+    r = con.execute("SELECT COALESCE(SUM(valor),0) v FROM anticipo WHERE identificacion=? AND anulado=0",
                     (nit,)).fetchone()
     return round(r["v"], 2)
 
 
 def anticipos_resumen(con, empresa=""):
     """Saldo de anticipo agrupado por proveedor."""
-    sql = "SELECT identificacion, MAX(proveedor) proveedor, SUM(valor) saldo, COUNT(*) movimientos FROM anticipo"
+    sql = ("SELECT identificacion, MAX(proveedor) proveedor, SUM(valor) saldo, COUNT(*) movimientos "
+           "FROM anticipo WHERE anulado=0")
     p = []
     if empresa:
-        sql += " WHERE empresa=?"
+        sql += " AND empresa=?"
         p.append(empresa)
     sql += " GROUP BY identificacion HAVING SUM(valor) <> 0 ORDER BY saldo DESC"
     return [dict(nit=r["identificacion"], proveedor=r["proveedor"],
@@ -545,10 +556,10 @@ def anticipos_resumen(con, empresa=""):
 
 
 def anticipos_movimientos(con, nit=None):
-    sql = "SELECT * FROM anticipo"
+    sql = "SELECT * FROM anticipo WHERE anulado=0"
     p = []
     if nit:
-        sql += " WHERE identificacion=?"
+        sql += " AND identificacion=?"
         p.append(nit)
     sql += " ORDER BY id DESC"
     return [dict(r) for r in con.execute(sql, p).fetchall()]
@@ -574,11 +585,12 @@ def cruzar_anticipo(con, nit, monto, empresa="", usuario="demo"):
     cruce = round(min(monto, disponible, saldo_total), 2)
     if cruce <= 0:
         return False, "No hay monto disponible para cruzar.", None
+    ref = "CRUCE-" + dt.datetime.now().strftime("%Y%m%d%H%M%S")
     plan, aplicado, _, _ = distribuir_abono(facturas, cruce)
     detalle = []
     for f, ap in plan:
         datos = dict(fecha_pago=today().isoformat(), banco="Anticipo", cuenta_bancaria="-",
-                     medio_pago="Cruce de anticipo", numero_comprobante="CRUCE",
+                     medio_pago="Cruce de anticipo", numero_comprobante=ref,
                      notas="Cruce de anticipo", valor_pagado=ap)
         ok, m = registrar_pago(con, f["id"], datos, usuario)
         if ok:
@@ -588,12 +600,78 @@ def cruzar_anticipo(con, nit, monto, empresa="", usuario="demo"):
     emp = empresa or facturas[0]["empresa"]
     # movimiento negativo que descarga el anticipo
     registrar_anticipo(con, emp, nit, prov_name, -round(aplicado, 2),
-                       "Cruce de anticipo con facturas", "CRUCE", usuario)
+                       "Cruce de anticipo con facturas", ref, usuario)
     resumen = dict(n=len(detalle), cruzado=round(aplicado, 2),
                    anticipo_restante=round(disponible - aplicado, 2), detalle=detalle)
     msg = "Cruce aplicado: {:,.0f} a {} factura(s). Anticipo restante: {:,.0f}.".format(
         aplicado, len(detalle), disponible - aplicado)
     return True, msg, resumen
+
+
+def comprobantes_resumen(con):
+    """Agrupa los movimientos activos por numero de comprobante (un comprobante = una operacion)."""
+    grupos = {}
+    for p in con.execute(
+            "SELECT p.*, f.numero_factura, f.proveedor, f.identificacion FROM pago p "
+            "JOIN factura f ON f.id=p.factura_id WHERE p.anulado=0 ORDER BY p.id DESC").fetchall():
+        k = p["numero_comprobante"]
+        g = grupos.setdefault(k, dict(comprobante=k, fecha=p["fecha_pago"], empresa=p["empresa"],
+                                      proveedor=p["proveedor"], nit=p["identificacion"],
+                                      n_facturas=0, valor_facturas=0.0, valor_anticipo=0.0,
+                                      es_cruce=False))
+        g["n_facturas"] += 1
+        g["valor_facturas"] = round(g["valor_facturas"] + (p["valor_pagado"] or 0), 2)
+        if p["medio_pago"] == "Cruce de anticipo":
+            g["es_cruce"] = True
+    for a in con.execute(
+            "SELECT * FROM anticipo WHERE anulado=0 AND valor > 0 AND origen LIKE 'Excedente%' "
+            "ORDER BY id DESC").fetchall():
+        k = a["numero_comprobante"]
+        g = grupos.setdefault(k, dict(comprobante=k, fecha=a["fecha"], empresa=a["empresa"],
+                                      proveedor=a["proveedor"], nit=a["identificacion"],
+                                      n_facturas=0, valor_facturas=0.0, valor_anticipo=0.0,
+                                      es_cruce=False))
+        g["valor_anticipo"] = round(g["valor_anticipo"] + a["valor"], 2)
+    out = []
+    for g in grupos.values():
+        g["total"] = round((0 if g["es_cruce"] else g["valor_facturas"]) + g["valor_anticipo"], 2)
+        out.append(g)
+    out.sort(key=lambda x: str(x["fecha"]), reverse=True)
+    return out
+
+
+def anular_comprobante(con, comprobante, usuario="demo", motivo="Anulacion de pago"):
+    """Anula todos los movimientos (pagos y anticipos) de un comprobante y restablece los
+    saldos de cartera y de anticipo del proveedor."""
+    pagos = con.execute("SELECT * FROM pago WHERE numero_comprobante=? AND anulado=0",
+                        (comprobante,)).fetchall()
+    antics = con.execute("SELECT * FROM anticipo WHERE numero_comprobante=? AND anulado=0",
+                         (comprobante,)).fetchall()
+    if not pagos and not antics:
+        return False, "No hay movimientos activos con ese comprobante."
+    for p in pagos:
+        r = con.execute("SELECT * FROM factura WHERE id=?", (p["factura_id"],)).fetchone()
+        if r:
+            nuevo_ab = round((r["total_abonado"] or 0) - (p["valor_pagado"] or 0), 2)
+            if nuevo_ab < 0:
+                nuevo_ab = 0.0
+            saldo_tes = round((r["valor_original"] or 0) - nuevo_ab, 2)
+            if saldo_tes <= 0.001:
+                nuevo_estado = "Pagada"
+            elif nuevo_ab > 0:
+                nuevo_estado = "Abonada parcialmente"
+            else:
+                nuevo_estado = "Pendiente"
+            con.execute("UPDATE factura SET total_abonado=?, estado=? WHERE id=?",
+                        (nuevo_ab, nuevo_estado, p["factura_id"]))
+            log_cambio(con, p["factura_id"], "pago_anulado", p["valor_pagado"], 0, usuario,
+                       motivo + " (comprobante " + str(comprobante) + ")")
+        con.execute("UPDATE pago SET anulado=1 WHERE id=?", (p["id"],))
+    for a in antics:
+        con.execute("UPDATE anticipo SET anulado=1 WHERE id=?", (a["id"],))
+    con.commit()
+    return True, ("Comprobante {} anulado: {} pago(s) y {} mov. de anticipo revertidos. "
+                  "Saldos restablecidos.".format(comprobante, len(pagos), len(antics)))
 
 
 def cambiar_estado(con, fid, nuevo, motivo="", usuario="demo"):
@@ -649,7 +727,7 @@ def dashboard_data(con):
     # Total pendiente = total cuentas por pagar - total pagado.
     total_pendiente = round(total_cxp - total_pagado, 2)
     # Anticipo disponible (saldo a favor neto de proveedores).
-    total_anticipo = con.execute("SELECT COALESCE(SUM(valor),0) v FROM anticipo").fetchone()["v"]
+    total_anticipo = con.execute("SELECT COALESCE(SUM(valor),0) v FROM anticipo WHERE anulado=0").fetchone()["v"]
     vencidas = [f for f in activas if f["vencida"]]
     por_vencer = [f for f in facturas
                   if f["cubeta"] == "Corriente" and f["estado"] not in ("Pagada", "Anulada")]
