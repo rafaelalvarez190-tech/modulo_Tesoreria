@@ -425,6 +425,19 @@ def guardar_ejecucion(con, proc, usuario="demo"):
     return eid, archivos
 
 
+def reset_planos(con, incluir_maestros=False):
+    """Limpia ejecuciones, archivos y consecutivos. Si incluir_maestros=True, tambien
+    borra empresas y cuentas pagadoras y vuelve a sembrar las empresas iniciales."""
+    for t in ("ap_archivo", "ap_ejecucion", "ap_consecutivo"):
+        con.execute("DELETE FROM " + t)
+    if incluir_maestros:
+        con.execute("DELETE FROM ap_cuenta")
+        con.execute("DELETE FROM ap_empresa")
+    con.commit()
+    if incluir_maestros:
+        init_planos(con)
+
+
 def ejecuciones(con):
     return [dict(r) for r in con.execute(
         "SELECT * FROM ap_ejecucion ORDER BY id DESC").fetchall()]
