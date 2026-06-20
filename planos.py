@@ -170,6 +170,11 @@ def toggle_cuenta(con, cid, activa):
     con.commit()
 
 
+def eliminar_cuenta(con, cid):
+    con.execute("DELETE FROM ap_cuenta WHERE id=?", (cid,))
+    con.commit()
+
+
 def cuenta_de(con, empresa_id, banco):
     return con.execute(
         "SELECT * FROM ap_cuenta WHERE empresa_id=? AND banco=? AND activa=1 LIMIT 1",
