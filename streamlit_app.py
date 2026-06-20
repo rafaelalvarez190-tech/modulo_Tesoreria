@@ -352,9 +352,15 @@ with st.sidebar:
     n = con.execute("SELECT COUNT(*) n FROM factura WHERE activo=1").fetchone()["n"]
     st.caption(f"Facturas en sistema: **{n}**")
     with st.expander("Opciones"):
-        if st.button("Reiniciar base de datos", use_container_width=True):
+        if st.button("Limpiar Tesoreria Integral (CxP)", use_container_width=True):
             core.reset_db(con)
-            st.success("Base de datos reiniciada.")
+            st.success("Datos de Tesoreria Integral reiniciados.")
+            st.rerun()
+        if st.button("Limpiar Archivos Planos (bancos)", use_container_width=True):
+            planos.reset_planos(con)
+            st.session_state.pop("ap_eid", None)
+            st.session_state.pop("ap_err", None)
+            st.success("Datos de Archivos Planos reiniciados.")
             st.rerun()
 
 
