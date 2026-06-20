@@ -3,11 +3,13 @@ streamlit_app.py - Modulo de Tesoreria Integral (Grupo Supre)
 App Streamlit para cargar, validar y gestionar Cuentas por Pagar.
 Despliegue: GitHub + https://share.streamlit.io
 """
+import io
 import datetime as dt
 import pandas as pd
 import streamlit as st
 
 import core
+import planos
 
 st.set_page_config(page_title="Tesoreria Integral - Supre", page_icon=":moneybag:", layout="wide")
 
@@ -19,6 +21,7 @@ BLUE = "#2e75b6"
 def conexion():
     con = core.get_conn()
     core.init_db(con)
+    planos.init_planos(con)
     return con
 
 
@@ -323,19 +326,27 @@ with st.sidebar:
                 "<div style='color:#666;font-size:13px;margin-top:-6px'>Tesoreria Integral - CxP</div>",
                 unsafe_allow_html=True)
     st.write("")
-    st.markdown(
-        "<div style='color:#1f3864;font-weight:700;font-size:12px;"
-        "text-transform:uppercase;letter-spacing:.5px'>Seguimiento y control de cuentas por pagar</div>",
-        unsafe_allow_html=True)
-    pagina = st.radio("Navegacion",
-                      ["Carga masiva", "Dashboard", "Facturas", "Pagos", "Anulaciones"],
-                      label_visibility="collapsed")
+    categoria = st.radio("Categoria",
+                         ["Seguimiento y control de cuentas por pagar", "Archivos planos bancos"],
+                         label_visibility="collapsed", key="categoria")
     st.write("")
-    st.markdown(
-        "<div style='color:#9aa5b1;font-weight:700;font-size:12px;"
-        "text-transform:uppercase;letter-spacing:.5px'>Archivos planos bancos</div>",
-        unsafe_allow_html=True)
-    st.caption("Proximamente (otro proyecto)")
+    if categoria == "Seguimiento y control de cuentas por pagar":
+        st.markdown(
+            "<div style='color:#1f3864;font-weight:700;font-size:12px;"
+            "text-transform:uppercase;letter-spacing:.5px'>Seguimiento y control de cuentas por pagar</div>",
+            unsafe_allow_html=True)
+        pagina = st.radio("Seccion",
+                          ["Carga masiva", "Dashboard", "Facturas", "Pagos", "Anulaciones"],
+                          label_visibility="collapsed", key="pg_cxp")
+    else:
+        st.markdown(
+            "<div style='color:#1f3864;font-weight:700;font-size:12px;"
+            "text-transform:uppercase;letter-spacing:.5px'>Archivos planos bancos</div>",
+            unsafe_allow_html=True)
+        pagina = st.radio("Seccion",
+                          ["Dispersion de Nomina", "Historial", "Dashboard Planos", "Empresas",
+                           "Cuentas Pagadoras", "Consecutivos", "Parametros Bancarios"],
+                          label_visibility="collapsed", key="pg_ap")
     st.write("---")
     st.caption(f"Usuario: **{USUARIO}**")
     n = con.execute("SELECT COUNT(*) n FROM factura WHERE activo=1").fetchone()["n"]
@@ -345,6 +356,204 @@ with st.sidebar:
             core.reset_db(con)
             st.success("Base de datos reiniciada.")
             st.rerun()
+
+
+# ===============================================================================
+# CATEGORIA: ARCHIVOS PLANOS BANCOS
+# ===============================================================================
+if categoria == "Archivos planos bancos":
+    import zipfile
+    XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    if pagina == "Dispersion de Nomina":
+        st.title("Dispersion de Nomina")
+        st.caption("Carga el archivo de Nomina y el de Informacion Bancaria, elige la fecha de "
+                   "aplicacion y ejecuta. El sistema une por cedula, valida, clasifica el banco y "
+                   "genera los archivos por Empresa + Banco.")
+        c1, c2 = st.columns(2)
+        f_nom = c1.file_uploader("Nomina (cedula, nombre, valor_pagar, empresa)",
+                                 type=["csv", "xlsx", "xls"], key="ap_nom")
+        f_ban = c2.file_uploader("Informacion bancaria (cedula, nombre, tipo_cuenta, numero_cuenta, entidad_bancaria)",
+                                 type=["csv", "xlsx", "xls"], key="ap_ban")
+        fecha_ap = st.date_input("Fecha de aplicacion", value=dt.date.today(), format="YYYY-MM-DD")
+        if st.button("Ejecutar proceso", type="primary"):
+            if not f_nom or not f_ban:
+                st.error("Debes cargar los dos archivos.")
+            else:
+                nrows, _, e1 = planos.leer_tabla(f_nom.name, f_nom.getvalue())
+                brows, _, e2 = planos.leer_tabla(f_ban.name, f_ban.getvalue())
+                if e1 or e2:
+                    st.error(e1 or e2)
+                else:
+                    proc = planos.procesar(con, nrows, brows, fecha_ap.isoformat())
+                    eid, _arch = planos.guardar_ejecucion(con, proc, USUARIO)
+                    st.session_state["ap_eid"] = eid
+                    st.session_state["ap_err"] = proc["errores"]
+                    st.rerun()
+
+        eid = st.session_state.get("ap_eid")
+        if eid:
+            arch = planos.archivos_de(con, eid)
+            errs = st.session_state.get("ap_err", [])
+            st.success("Proceso ejecutado. Ejecucion #%d." % eid)
+            kk = st.columns(4)
+            kk[0].metric("Archivos generados", len(arch))
+            kk[1].metric("Empleados", sum(a["n_empleados"] for a in arch))
+            kk[2].metric("Valor dispersado", money(sum(a["valor_total"] for a in arch)))
+            kk[3].metric("Inconsistencias", len(errs))
+            if arch:
+                st.markdown("**Archivos generados (Empresa + Banco)**")
+                st.dataframe(pd.DataFrame([{
+                    "Empresa": a["empresa"], "Banco": a["banco"], "Empleados": a["n_empleados"],
+                    "Valor total": money(a["valor_total"]), "Secuencia": a["secuencia"] or "-",
+                    "Archivo": a["nombre_archivo"]} for a in arch]),
+                    use_container_width=True, hide_index=True)
+                zbuf = io.BytesIO()
+                with zipfile.ZipFile(zbuf, "w") as zf:
+                    for a in arch:
+                        if a["estructura"]:
+                            zf.writestr(a["nombre_archivo"], planos.archivo_xlsx_bytes(a["estructura"]))
+                st.download_button("Descargar todos (ZIP)", data=zbuf.getvalue(),
+                                   file_name="archivos_planos_%d.zip" % eid, mime="application/zip")
+                for a in arch:
+                    if a["estructura"]:
+                        st.download_button("Descargar " + a["nombre_archivo"],
+                                           data=planos.archivo_xlsx_bytes(a["estructura"]),
+                                           file_name=a["nombre_archivo"], mime=XLSX_MIME,
+                                           key="dl_%d" % a["id"])
+            if errs:
+                st.markdown("**Inconsistencias**")
+                st.dataframe(pd.DataFrame(errs), use_container_width=True, hide_index=True)
+                st.download_button("Descargar inconsistencias (Excel)",
+                                   data=planos.errores_xlsx_bytes(errs),
+                                   file_name="inconsistencias_%d.xlsx" % eid, mime=XLSX_MIME)
+
+    elif pagina == "Historial":
+        st.title("Historial de ejecuciones")
+        ejs = planos.ejecuciones(con)
+        if not ejs:
+            st.info("Aun no hay ejecuciones.")
+        else:
+            st.dataframe(pd.DataFrame([{
+                "#": e["id"], "Fecha": e["fecha"], "Usuario": e["usuario"],
+                "Fecha aplicacion": e["fecha_aplicacion"], "Empleados": e["total_empleados"],
+                "Valor": money(e["total_valor"]), "Archivos": e["n_archivos"],
+                "Errores": e["n_errores"]} for e in ejs]),
+                use_container_width=True, hide_index=True)
+            sel = st.selectbox("Ver archivos de la ejecucion #", [e["id"] for e in ejs])
+            for a in planos.archivos_de(con, sel):
+                if a["estructura"]:
+                    st.download_button(
+                        "%s  (%d empleados, %s)" % (a["nombre_archivo"], a["n_empleados"], money(a["valor_total"])),
+                        data=planos.archivo_xlsx_bytes(a["estructura"]), file_name=a["nombre_archivo"],
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="h_%d" % a["id"])
+
+    elif pagina == "Dashboard Planos":
+        st.title("Dashboard - Archivos Planos")
+        d = planos.dashboard_planos(con)
+        kk = st.columns(4)
+        kk[0].metric("Total empleados procesados", d["tot_emp"])
+        kk[1].metric("Total valor dispersado", money(d["tot_val"]))
+        kk[2].metric("Total archivos generados", d["n_arch"])
+        kk[3].metric("Total errores", d["n_err"])
+        if d["resumen"]:
+            st.markdown("**Resumen por Empresa + Banco**")
+            st.dataframe(pd.DataFrame([{
+                "Empresa": r["empresa"], "Banco": r["banco"], "Empleados": r["emp"],
+                "Valor Total": money(r["val"])} for r in d["resumen"]]),
+                use_container_width=True, hide_index=True)
+        else:
+            st.info("Aun no hay datos. Ejecuta una dispersion.")
+
+    elif pagina == "Empresas":
+        st.title("Empresas")
+        with st.form("ap_emp_new", clear_on_submit=True):
+            cc = st.columns([3, 2, 1])
+            nom = cc[0].text_input("Nombre empresa")
+            nit = cc[1].text_input("NIT")
+            cc[2].markdown("&nbsp;")
+            if st.form_submit_button("Crear empresa", type="primary"):
+                if nom.strip() and nit.strip():
+                    planos.crear_empresa(con, nom, nit); st.success("Empresa creada."); st.rerun()
+                else:
+                    st.error("Nombre y NIT son obligatorios.")
+        for e in planos.empresas(con):
+            cols = st.columns([3, 2, 1, 1])
+            cols[0].write(e["nombre"]); cols[1].write("NIT " + e["nit"])
+            cols[2].write("Activa" if e["activo"] else "Inactiva")
+            if cols[3].button("Inactivar" if e["activo"] else "Activar", key="em_%d" % e["id"]):
+                planos.editar_empresa(con, e["id"], e["nombre"], e["nit"], not e["activo"]); st.rerun()
+
+    elif pagina == "Cuentas Pagadoras":
+        st.title("Cuentas Pagadoras")
+        emps = planos.empresas(con, solo_activas=True)
+        if not emps:
+            st.info("Crea primero una empresa.")
+        else:
+            with st.form("ap_cta_new", clear_on_submit=True):
+                st.markdown("**Nueva cuenta pagadora**")
+                cc = st.columns(3)
+                emp = cc[0].selectbox("Empresa", emps, format_func=lambda e: e["nombre"])
+                banco = cc[1].selectbox("Banco", ["Bancolombia", "Davivienda"])
+                numero = cc[2].text_input("Numero de cuenta")
+                cc2 = st.columns(3)
+                tipo = cc2[0].selectbox("Tipo de cuenta", ["S", "D"])
+                nitp = cc2[1].text_input("NIT pagador")
+                desc = cc2[2].text_input("Descripcion del pago", value="Pago nomina")
+                cc3 = st.columns(2)
+                tpago = cc3[0].text_input("Tipo de pago (Bancolombia)", value="220")
+                aplic = cc3[1].text_input("Aplicacion (Bancolombia)", value="I")
+                if st.form_submit_button("Crear cuenta", type="primary"):
+                    planos.crear_cuenta(con, emp["id"], banco, numero, tipo, nitp, desc, tpago, aplic)
+                    st.success("Cuenta creada."); st.rerun()
+            st.markdown("**Cuentas registradas**")
+            cs = planos.cuentas(con)
+            if cs:
+                st.dataframe(pd.DataFrame([{
+                    "Empresa": c["empresa_nombre"], "Banco": c["banco"], "Cuenta": c["numero_cuenta"],
+                    "Tipo": c["tipo_cuenta"], "NIT pagador": c["nit_pagador"],
+                    "Descripcion": c["descripcion_pago"], "Activa": "Si" if c["activa"] else "No"}
+                    for c in cs]), use_container_width=True, hide_index=True)
+            else:
+                st.caption("Sin cuentas.")
+
+    elif pagina == "Consecutivos":
+        st.title("Consecutivos de envio")
+        cs = planos.consecutivos(con)
+        if cs:
+            st.dataframe(pd.DataFrame([{
+                "Empresa": c["empresa"], "Banco": c["banco"], "Ultima secuencia": c["ultima_secuencia"]}
+                for c in cs]), use_container_width=True, hide_index=True)
+        else:
+            st.caption("Aun no hay consecutivos (se crean al generar archivos Bancolombia).")
+        st.markdown("**Reiniciar / ajustar consecutivo**")
+        emps = planos.empresas(con)
+        if emps:
+            cc = st.columns(3)
+            emp = cc[0].selectbox("Empresa", emps, format_func=lambda e: e["nombre"], key="cons_emp")
+            banco = cc[1].selectbox("Banco", ["Bancolombia", "Davivienda"], key="cons_ban")
+            val = cc[2].number_input("Nuevo valor", min_value=0, step=1, value=0)
+            if st.button("Aplicar"):
+                planos.reiniciar_consecutivo(con, emp["id"], banco, int(val))
+                st.success("Consecutivo actualizado."); st.rerun()
+
+    elif pagina == "Parametros Bancarios":
+        st.title("Parametros Bancarios")
+        st.caption("Estructura y reglas de los archivos planos (segun los modelos suministrados).")
+        st.markdown("**Bancolombia**")
+        st.write("Encabezado: " + ", ".join(planos.BANCOLOMBIA_HEADER))
+        st.write("Detalle: " + ", ".join(planos.BANCOLOMBIA_DETALLE))
+        st.write("Campos fijos: Tipo Documento Beneficiario = 1, Tipo Transaccion = 37.")
+        st.write("Codigo Banco: Bancolombia Ahorros = 1007, Nequi = 1507.")
+        st.markdown("**Davivienda**")
+        st.write("Columnas: " + ", ".join(planos.DAVIVIENDA_COLS))
+        st.write("Campos fijos: Tipo Identificacion = 1, Codigo del Banco = 51.")
+        st.write("Tipo de Producto: Daviplata = DP, Cuenta Ahorros = CA.")
+        st.info("El mapeo de cada campo esta implementado segun los modelos. "
+                "Para cambios de layout se ajusta planos.py.")
+
+    st.stop()
+
 
 
 # ===============================================================================
