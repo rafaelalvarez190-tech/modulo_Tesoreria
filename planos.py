@@ -26,6 +26,13 @@ DAVIVIENDA_COLS = ["Tipo de Identificacion", "Numero de Identificacion", "Nombre
                    "Codigo del Banco", "Tipo de Producto o Servicio", "Numero de producto o servicio",
                    "Valor del pago o la recarga"]
 
+DEFAULT_PARAMS = {
+    "Bancolombia": {"tipo_doc_beneficiario": "1", "tipo_transaccion": "37",
+                    "codigos": {"BANCOLOMBIA": "1007", "NEQUI": "1507"}},
+    "Davivienda": {"tipo_identificacion": "1", "codigo_banco": "51",
+                   "productos": {"DAVIVIENDA": "CA", "DAVIPLATA": "DP"}},
+}
+
 EMPRESAS_SEED = [
     ("Supremotos SAS", "900768559"),
     ("Suprecredito SAS", "901347233"),
@@ -58,6 +65,10 @@ CREATE TABLE IF NOT EXISTS ap_archivo (
     ejecucion_id INTEGER, empresa TEXT, banco TEXT, n_empleados INTEGER,
     valor_total REAL, secuencia INTEGER, nombre_archivo TEXT, datos_json TEXT
 );
+CREATE TABLE IF NOT EXISTS ap_parametro (
+    banco TEXT PRIMARY KEY, config_json TEXT,
+    modelo_nombre TEXT, modelo_blob BLOB, updated_at TEXT
+);
 """
 
 
@@ -76,6 +87,10 @@ def init_planos(con):
                 " descripcion_pago, tipo_pago, aplicacion, activa) VALUES (?,?,?,?,?,?,?,?,1)",
                 (e["id"], "Bancolombia", "2331597140", "S", "900768559", "Pago nomina", "220", "I"))
         con.commit()
+    for banco, cfg in DEFAULT_PARAMS.items():
+        con.execute("INSERT OR IGNORE INTO ap_parametro (banco, config_json, updated_at) VALUES (?,?,?)",
+                    (banco, json.dumps(cfg), now()))
+    con.commit()
 
 
 def now():
@@ -195,6 +210,41 @@ def consecutivos(con):
     return [dict(r) for r in rows]
 
 
+# ---- Parametros bancarios ----
+def get_param(con, banco):
+    base = dict(DEFAULT_PARAMS.get(banco, {}))
+    r = con.execute("SELECT config_json FROM ap_parametro WHERE banco=?", (banco,)).fetchone()
+    if r and r["config_json"]:
+        try:
+            base.update(json.loads(r["config_json"]))
+        except Exception:
+            pass
+    return base
+
+
+def set_param(con, banco, config):
+    con.execute(
+        "INSERT INTO ap_parametro (banco, config_json, updated_at) VALUES (?,?,?) "
+        "ON CONFLICT(banco) DO UPDATE SET config_json=excluded.config_json, updated_at=excluded.updated_at",
+        (banco, json.dumps(config), now()))
+    con.commit()
+
+
+def guardar_modelo(con, banco, nombre, blob):
+    con.execute("INSERT INTO ap_parametro (banco, modelo_nombre, modelo_blob, updated_at) VALUES (?,?,?,?) "
+                "ON CONFLICT(banco) DO UPDATE SET modelo_nombre=excluded.modelo_nombre, "
+                "modelo_blob=excluded.modelo_blob, updated_at=excluded.updated_at",
+                (banco, nombre, blob, now()))
+    con.commit()
+
+
+def modelo_de(con, banco):
+    r = con.execute("SELECT modelo_nombre, modelo_blob FROM ap_parametro WHERE banco=?", (banco,)).fetchone()
+    if r and r["modelo_nombre"]:
+        return r["modelo_nombre"], r["modelo_blob"]
+    return None, None
+
+
 # ---- Lectura de archivos ----
 def leer_tabla(filename, raw):
     """Lee xlsx/xls/csv en lista de dicts con columnas en minuscula. Devuelve (rows, cols, error)."""
@@ -233,17 +283,17 @@ def _get(row, *claves):
 
 
 # ---- Clasificacion de banco ----
-def clasificar(entidad):
-    """Devuelve (grupo, codigo_banco, tipo_producto) o (None,...) si no soportada."""
+def clasificar(con, entidad):
+    """Devuelve (grupo, codigo_banco, tipo_producto) usando los parametros editables."""
     e = norm(entidad)
-    if "NEQUI" in e:
-        return "Bancolombia", "1507", None
-    if "BANCOLOMBIA" in e:
-        return "Bancolombia", "1007", None
-    if "DAVIPLATA" in e:
-        return "Davivienda", "51", "DP"
-    if "DAVIVIENDA" in e:
-        return "Davivienda", "51", "CA"
+    pb = get_param(con, "Bancolombia")
+    pdv = get_param(con, "Davivienda")
+    for k, code in pb.get("codigos", {}).items():
+        if norm(k) in e:
+            return "Bancolombia", str(code), None
+    for k, prod in pdv.get("productos", {}).items():
+        if norm(k) in e:
+            return "Davivienda", str(pdv.get("codigo_banco", "51")), str(prod)
     return None, None, None
 
 
@@ -295,7 +345,7 @@ def procesar(con, nomina_rows, banco_rows, fecha_aplicacion):
         if not numero_cuenta:
             errores.append({"cedula": ced, "nombre": nombre, "empresa": emp_nom, "motivo": "Numero de cuenta vacio"})
             continue
-        grupo, codigo, producto = clasificar(entidad)
+        grupo, codigo, producto = clasificar(con, entidad)
         if grupo is None:
             errores.append({"cedula": ced, "nombre": nombre, "empresa": emp_nom,
                             "motivo": "Entidad no soportada: " + entidad})
@@ -340,6 +390,8 @@ def construir_filas(con, emp_nom, grupo, filas, fecha_aplicacion):
     """Devuelve dict con estructura del archivo (header + detalle) listo para xlsx."""
     emp = filas[0]["empresa_obj"]
     fecha_txt = str(fecha_aplicacion).replace("-", "")
+    pb = get_param(con, "Bancolombia")
+    pdv = get_param(con, "Davivienda")
     if grupo == "Bancolombia":
         cuenta = cuenta_de(con, emp["id"], "Bancolombia") if emp else None
         seq = consecutivo_actual(con, emp["id"], "Bancolombia") + 1 if emp else 0
@@ -354,15 +406,17 @@ def construir_filas(con, emp_nom, grupo, filas, fecha_aplicacion):
         ]
         detalle = []
         for f in filas:
-            detalle.append(["1", f["cedula"], f["nombre"] + (" " + f["apellidos"] if f["apellidos"] else ""),
-                            "37", f["codigo_banco"], f["numero_cuenta"], "", "", "", "",
-                            f["valor"], fecha_txt])
+            detalle.append([pb.get("tipo_doc_beneficiario", "1"), f["cedula"],
+                            f["nombre"] + (" " + f["apellidos"] if f["apellidos"] else ""),
+                            pb.get("tipo_transaccion", "37"), f["codigo_banco"], f["numero_cuenta"],
+                            "", "", "", "", f["valor"], fecha_txt])
         return {"tipo": "Bancolombia", "header_cols": BANCOLOMBIA_HEADER, "header_vals": header_vals,
                 "detalle_cols": BANCOLOMBIA_DETALLE, "detalle": detalle, "secuencia": seq}
     else:  # Davivienda
         detalle = []
         for f in filas:
-            detalle.append(["1", f["cedula"], f["nombre"], f["apellidos"], "51",
+            detalle.append([pdv.get("tipo_identificacion", "1"), f["cedula"], f["nombre"],
+                            f["apellidos"], pdv.get("codigo_banco", "51"),
                             f["producto"] or "CA", f["numero_cuenta"], f["valor"]])
         return {"tipo": "Davivienda", "header_cols": None, "header_vals": None,
                 "detalle_cols": DAVIVIENDA_COLS, "detalle": detalle, "secuencia": None}
