@@ -89,3 +89,27 @@ cambiar la UI, solo `core.py`):
 - **`core.py`** — toda la lógica (sin Streamlit): base de datos, validación, upsert,
   pagos, estados, datos del dashboard. Fácil de testear y de migrar a otra base.
 - **`streamlit_app.py`** — interfaz de usuario (navegación, formularios, tablas, gráficos).
+
+---
+
+## Categoría: Archivos Planos (dispersión de nómina)
+
+Segunda categoría de la app (selector en la barra lateral). Genera archivos bancarios
+para dispersión de nómina por **Empresa + Banco** (Bancolombia y Davivienda).
+
+Submódulos:
+- **Dispersión de Nómina:** cargas 2 archivos (Nómina e Información Bancaria), eliges la
+  fecha de aplicación y ejecutas. El sistema une por **cédula**, valida, clasifica el banco
+  (Bancolombia/Nequi → Bancolombia; Davivienda/Daviplata → Davivienda) y genera un `.xlsx`
+  por cada empresa+banco, más el reporte de inconsistencias.
+- **Historial:** ejecuciones anteriores con re-descarga de archivos.
+- **Dashboard Planos:** empleados, valor dispersado, archivos y errores; resumen por empresa+banco.
+- **Empresas / Cuentas Pagadoras / Consecutivos / Parámetros Bancarios:** maestros y configuración.
+
+Archivos de ejemplo incluidos: `nomina_ejemplo.csv`, `info_bancaria_ejemplo.csv`.
+
+Estructura del archivo de **Nómina**: `cedula, nombre, valor_pagar, empresa`.
+Estructura del archivo de **Información Bancaria**: `cedula, nombre, tipo_cuenta, numero_cuenta, entidad_bancaria`.
+
+> Las cuentas pagadoras (NIT pagador, cuenta a debitar, etc.) se configuran en **Cuentas Pagadoras**
+> por Empresa + Banco; el encabezado Bancolombia las usa al generar el archivo.
