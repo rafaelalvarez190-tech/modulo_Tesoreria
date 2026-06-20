@@ -344,8 +344,8 @@ with st.sidebar:
             "text-transform:uppercase;letter-spacing:.5px'>Archivos planos bancos</div>",
             unsafe_allow_html=True)
         pagina = st.radio("Seccion",
-                          ["Dispersion de Nomina", "Historial", "Dashboard Planos", "Empresas",
-                           "Cuentas Pagadoras", "Consecutivos", "Parametros Bancarios"],
+                          ["Parametros Bancarios", "Dispersion de Nomina", "Historial",
+                           "Dashboard Planos", "Empresas", "Cuentas Pagadoras", "Consecutivos"],
                           label_visibility="collapsed", key="pg_ap")
     st.write("---")
     st.caption(f"Usuario: **{USUARIO}**")
@@ -545,18 +545,83 @@ if categoria == "Archivos planos bancos":
 
     elif pagina == "Parametros Bancarios":
         st.title("Parametros Bancarios")
-        st.caption("Estructura y reglas de los archivos planos (segun los modelos suministrados).")
-        st.markdown("**Bancolombia**")
-        st.write("Encabezado: " + ", ".join(planos.BANCOLOMBIA_HEADER))
-        st.write("Detalle: " + ", ".join(planos.BANCOLOMBIA_DETALLE))
-        st.write("Campos fijos: Tipo Documento Beneficiario = 1, Tipo Transaccion = 37.")
-        st.write("Codigo Banco: Bancolombia Ahorros = 1007, Nequi = 1507.")
-        st.markdown("**Davivienda**")
-        st.write("Columnas: " + ", ".join(planos.DAVIVIENDA_COLS))
-        st.write("Campos fijos: Tipo Identificacion = 1, Codigo del Banco = 51.")
-        st.write("Tipo de Producto: Daviplata = DP, Cuenta Ahorros = CA.")
-        st.info("El mapeo de cada campo esta implementado segun los modelos. "
-                "Para cambios de layout se ajusta planos.py.")
+        st.caption("Configura los campos fijos, codigos de banco y tipos de producto, y adjunta el "
+                   "archivo modelo de cada banco. Si el banco cambia el formato o los codigos, lo "
+                   "actualizas aqui sin tocar el codigo.")
+        tabB, tabD = st.tabs(["Bancolombia", "Davivienda"])
+
+        with tabB:
+            pb = planos.get_param(con, "Bancolombia")
+            with st.form("par_banc"):
+                st.markdown("**Campos fijos**")
+                cc = st.columns(2)
+                td = cc[0].text_input("Tipo Documento Beneficiario", value=pb.get("tipo_doc_beneficiario", "1"))
+                tt = cc[1].text_input("Tipo Transaccion", value=pb.get("tipo_transaccion", "37"))
+                st.markdown("**Codigos de banco** (una linea por entidad, formato ENTIDAD=CODIGO)")
+                cod_txt = "\n".join("%s=%s" % (k, v) for k, v in pb.get("codigos", {}).items())
+                cod = st.text_area("Codigos", value=cod_txt, height=120,
+                                   help="Las entidades que aparezcan aqui se enrutan al archivo Bancolombia con su codigo.")
+                if st.form_submit_button("Guardar parametros Bancolombia", type="primary"):
+                    codigos = {}
+                    for ln in cod.splitlines():
+                        if "=" in ln:
+                            k, v = ln.split("=", 1)
+                            if k.strip():
+                                codigos[k.strip().upper()] = v.strip()
+                    planos.set_param(con, "Bancolombia", {
+                        "tipo_doc_beneficiario": td.strip(), "tipo_transaccion": tt.strip(),
+                        "codigos": codigos})
+                    st.success("Parametros de Bancolombia guardados."); st.rerun()
+            st.markdown("**Archivo modelo**")
+            nom, blob = planos.modelo_de(con, "Bancolombia")
+            if nom:
+                st.caption("Modelo actual: " + nom)
+                st.download_button("Descargar modelo", data=blob, file_name=nom, key="dl_mod_b")
+            else:
+                st.caption("Aun no hay archivo modelo adjunto.")
+            mfb = st.file_uploader("Adjuntar / actualizar modelo Bancolombia",
+                                   type=["xls", "xlsx", "csv", "txt"], key="up_mod_b")
+            if mfb is not None and st.button("Guardar modelo Bancolombia", key="btn_mod_b"):
+                planos.guardar_modelo(con, "Bancolombia", mfb.name, mfb.getvalue())
+                st.success("Modelo guardado."); st.rerun()
+            st.caption("Estructura - Encabezado: " + ", ".join(planos.BANCOLOMBIA_HEADER))
+            st.caption("Estructura - Detalle: " + ", ".join(planos.BANCOLOMBIA_DETALLE))
+
+        with tabD:
+            pdv = planos.get_param(con, "Davivienda")
+            with st.form("par_davi"):
+                st.markdown("**Campos fijos**")
+                cc = st.columns(2)
+                ti = cc[0].text_input("Tipo Identificacion", value=pdv.get("tipo_identificacion", "1"))
+                cb = cc[1].text_input("Codigo del Banco", value=pdv.get("codigo_banco", "51"))
+                st.markdown("**Tipos de producto** (una linea por entidad, formato ENTIDAD=PRODUCTO)")
+                pr_txt = "\n".join("%s=%s" % (k, v) for k, v in pdv.get("productos", {}).items())
+                pr = st.text_area("Productos", value=pr_txt, height=120,
+                                  help="Ej: DAVIPLATA=DP, DAVIVIENDA=CA. Estas entidades se enrutan al archivo Davivienda.")
+                if st.form_submit_button("Guardar parametros Davivienda", type="primary"):
+                    productos = {}
+                    for ln in pr.splitlines():
+                        if "=" in ln:
+                            k, v = ln.split("=", 1)
+                            if k.strip():
+                                productos[k.strip().upper()] = v.strip()
+                    planos.set_param(con, "Davivienda", {
+                        "tipo_identificacion": ti.strip(), "codigo_banco": cb.strip(),
+                        "productos": productos})
+                    st.success("Parametros de Davivienda guardados."); st.rerun()
+            st.markdown("**Archivo modelo**")
+            nom, blob = planos.modelo_de(con, "Davivienda")
+            if nom:
+                st.caption("Modelo actual: " + nom)
+                st.download_button("Descargar modelo", data=blob, file_name=nom, key="dl_mod_d")
+            else:
+                st.caption("Aun no hay archivo modelo adjunto.")
+            mfd = st.file_uploader("Adjuntar / actualizar modelo Davivienda",
+                                   type=["xls", "xlsx", "csv", "txt"], key="up_mod_d")
+            if mfd is not None and st.button("Guardar modelo Davivienda", key="btn_mod_d"):
+                planos.guardar_modelo(con, "Davivienda", mfd.name, mfd.getvalue())
+                st.success("Modelo guardado."); st.rerun()
+            st.caption("Estructura - Columnas: " + ", ".join(planos.DAVIVIENDA_COLS))
 
     st.stop()
 
