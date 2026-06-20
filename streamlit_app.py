@@ -515,11 +515,19 @@ if categoria == "Archivos planos bancos":
             st.markdown("**Cuentas registradas**")
             cs = planos.cuentas(con)
             if cs:
-                st.dataframe(pd.DataFrame([{
-                    "Empresa": c["empresa_nombre"], "Banco": c["banco"], "Cuenta": c["numero_cuenta"],
-                    "Tipo": c["tipo_cuenta"], "NIT pagador": c["nit_pagador"],
-                    "Descripcion": c["descripcion_pago"], "Activa": "Si" if c["activa"] else "No"}
-                    for c in cs]), use_container_width=True, hide_index=True)
+                hc = st.columns([2.6, 1.3, 2.2, 1, 1.1, 1])
+                for h, t in zip(hc, ["Empresa", "Banco", "Cuenta", "Estado", "", ""]):
+                    h.markdown("**%s**" % t if t else " ")
+                for c in cs:
+                    cols = st.columns([2.6, 1.3, 2.2, 1, 1.1, 1])
+                    cols[0].write(c["empresa_nombre"])
+                    cols[1].write(c["banco"])
+                    cols[2].write("Cta %s (%s) - NIT %s" % (c["numero_cuenta"], c["tipo_cuenta"], c["nit_pagador"]))
+                    cols[3].write("Activa" if c["activa"] else "Inactiva")
+                    if cols[4].button("Inactivar" if c["activa"] else "Activar", key="tg_cta_%d" % c["id"]):
+                        planos.toggle_cuenta(con, c["id"], not c["activa"]); st.rerun()
+                    if cols[5].button("Eliminar", key="del_cta_%d" % c["id"]):
+                        planos.eliminar_cuenta(con, c["id"]); st.success("Cuenta eliminada."); st.rerun()
             else:
                 st.caption("Sin cuentas.")
 
