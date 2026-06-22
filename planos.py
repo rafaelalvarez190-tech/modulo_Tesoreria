@@ -22,9 +22,10 @@ BANCOLOMBIA_DETALLE = ["Tipo Documento Beneficiario", "Nit Beneficiario", "Nombr
                        "Tipo Transaccion", "Codigo Banco", "No Cuenta Beneficiario", "Email",
                        "Documento Autorizado", "Referencia", "Celular Beneficiario",
                        "ValorTransaccion", "Fecha de aplicacion"]
-DAVIVIENDA_COLS = ["Tipo de Identificacion", "Numero de Identificacion", "Nombre", "Apellido",
-                   "Codigo del Banco", "Tipo de Producto o Servicio", "Numero de producto o servicio",
-                   "Valor del pago o la recarga"]
+DAVIVIENDA_COLS = ["Tipo de Identificación", "Número de Identificación", "Nombre", "Apellido",
+                   "Código del Banco", "Tipo de Producto o Servicio", "Número del Producto o Servicio",
+                   "Valor del pago o de la recarga", "Referencia (Opcional)",
+                   "Correo Electronico (Opcional)", "Descripción o Detalle (Opcional)"]
 
 DEFAULT_PARAMS = {
     "Bancolombia": {"tipo_doc_beneficiario": "1", "tipo_transaccion": "37",
@@ -459,9 +460,10 @@ def construir_filas(con, emp_nom, grupo, filas, fecha_aplicacion):
     else:  # Davivienda
         detalle = []
         for f in filas:
-            detalle.append([pdv.get("tipo_identificacion", "1"), f["cedula"], f["nombre"],
-                            f["apellidos"], pdv.get("codigo_banco", "51"),
-                            f["producto"] or "CA", f["numero_cuenta"], f["valor"]])
+            detalle.append([pdv.get("tipo_identificacion", "1"), f["cedula"],
+                            (f["nombre"] or "").upper(), (f["apellidos"] or "").upper(),
+                            pdv.get("codigo_banco", "51"), f["producto"] or "CA",
+                            f["numero_cuenta"], round(f["valor"], 2), "", "", ""])
         return {"tipo": "Davivienda", "header_cols": None, "header_vals": None,
                 "detalle_cols": DAVIVIENDA_COLS, "detalle": detalle, "secuencia": None}
 
