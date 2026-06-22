@@ -345,7 +345,7 @@ with st.sidebar:
             unsafe_allow_html=True)
         pagina = st.radio("Seccion",
                           ["Parametros Bancarios", "Dispersion de Nomina", "Historial",
-                           "Dashboard Planos", "Empresas", "Cuentas Pagadoras", "Consecutivos"],
+                           "Dashboard Planos", "Empresas"],
                           label_visibility="collapsed", key="pg_ap")
     st.write("---")
     st.caption(f"Usuario: **{USUARIO}**")
@@ -490,73 +490,12 @@ if categoria == "Archivos planos bancos":
             if cols[3].button("Inactivar" if e["activo"] else "Activar", key="em_%d" % e["id"]):
                 planos.editar_empresa(con, e["id"], e["nombre"], e["nit"], not e["activo"]); st.rerun()
 
-    elif pagina == "Cuentas Pagadoras":
-        st.title("Cuentas Pagadoras")
-        emps = planos.empresas(con, solo_activas=True)
-        if not emps:
-            st.info("Crea primero una empresa.")
-        else:
-            with st.form("ap_cta_new", clear_on_submit=True):
-                st.markdown("**Nueva cuenta pagadora**")
-                cc = st.columns(3)
-                emp = cc[0].selectbox("Empresa", emps, format_func=lambda e: e["nombre"])
-                banco = cc[1].selectbox("Banco", ["Bancolombia", "Davivienda"])
-                numero = cc[2].text_input("Numero de cuenta")
-                cc2 = st.columns(3)
-                tipo = cc2[0].selectbox("Tipo de cuenta", ["S", "D"])
-                nitp = cc2[1].text_input("NIT pagador")
-                desc = cc2[2].text_input("Descripcion del pago", value="Pago nomina")
-                cc3 = st.columns(2)
-                tpago = cc3[0].text_input("Tipo de pago (Bancolombia)", value="220")
-                aplic = cc3[1].text_input("Aplicacion (Bancolombia)", value="I")
-                if st.form_submit_button("Crear cuenta", type="primary"):
-                    planos.crear_cuenta(con, emp["id"], banco, numero, tipo, nitp, desc, tpago, aplic)
-                    st.success("Cuenta creada."); st.rerun()
-            st.markdown("**Cuentas registradas**")
-            cs = planos.cuentas(con)
-            if cs:
-                hc = st.columns([2.6, 1.3, 2.2, 1, 1.1, 1])
-                for h, t in zip(hc, ["Empresa", "Banco", "Cuenta", "Estado", "", ""]):
-                    h.markdown("**%s**" % t if t else " ")
-                for c in cs:
-                    cols = st.columns([2.6, 1.3, 2.2, 1, 1.1, 1])
-                    cols[0].write(c["empresa_nombre"])
-                    cols[1].write(c["banco"])
-                    cols[2].write("Cta %s (%s) - NIT %s" % (c["numero_cuenta"], c["tipo_cuenta"], c["nit_pagador"]))
-                    cols[3].write("Activa" if c["activa"] else "Inactiva")
-                    if cols[4].button("Inactivar" if c["activa"] else "Activar", key="tg_cta_%d" % c["id"]):
-                        planos.toggle_cuenta(con, c["id"], not c["activa"]); st.rerun()
-                    if cols[5].button("Eliminar", key="del_cta_%d" % c["id"]):
-                        planos.eliminar_cuenta(con, c["id"]); st.success("Cuenta eliminada."); st.rerun()
-            else:
-                st.caption("Sin cuentas.")
-
-    elif pagina == "Consecutivos":
-        st.title("Consecutivos de envio")
-        cs = planos.consecutivos(con)
-        if cs:
-            st.dataframe(pd.DataFrame([{
-                "Empresa": c["empresa"], "Banco": c["banco"], "Ultima secuencia": c["ultima_secuencia"]}
-                for c in cs]), use_container_width=True, hide_index=True)
-        else:
-            st.caption("Aun no hay consecutivos (se crean al generar archivos Bancolombia).")
-        st.markdown("**Reiniciar / ajustar consecutivo**")
-        emps = planos.empresas(con)
-        if emps:
-            cc = st.columns(3)
-            emp = cc[0].selectbox("Empresa", emps, format_func=lambda e: e["nombre"], key="cons_emp")
-            banco = cc[1].selectbox("Banco", ["Bancolombia", "Davivienda"], key="cons_ban")
-            val = cc[2].number_input("Nuevo valor", min_value=0, step=1, value=0)
-            if st.button("Aplicar"):
-                planos.reiniciar_consecutivo(con, emp["id"], banco, int(val))
-                st.success("Consecutivo actualizado."); st.rerun()
-
     elif pagina == "Parametros Bancarios":
         st.title("Parametros Bancarios")
         st.caption("Configura los campos fijos, codigos de banco y tipos de producto, y adjunta el "
                    "archivo modelo de cada banco. Si el banco cambia el formato o los codigos, lo "
                    "actualizas aqui sin tocar el codigo.")
-        tabB, tabD = st.tabs(["Bancolombia", "Davivienda"])
+        tabB, tabD, tabC = st.tabs(["Bancolombia", "Davivienda", "Cuentas Pagadoras"])
 
         with tabB:
             pb = planos.get_param(con, "Bancolombia")
@@ -567,8 +506,12 @@ if categoria == "Archivos planos bancos":
                 tt = cc[1].text_input("Tipo Transaccion", value=pb.get("tipo_transaccion", "37"))
                 st.markdown("**Codigos de banco** (una linea por entidad, formato ENTIDAD=CODIGO)")
                 cod_txt = "\n".join("%s=%s" % (k, v) for k, v in pb.get("codigos", {}).items())
-                cod = st.text_area("Codigos", value=cod_txt, height=120,
+                cod = st.text_area("Codigos", value=cod_txt, height=110,
                                    help="Las entidades que aparezcan aqui se enrutan al archivo Bancolombia con su codigo.")
+                st.markdown("**Tipo de transaccion por codigo** (una linea por codigo, formato CODIGO=TRANSACCION)")
+                tr_txt = "\n".join("%s=%s" % (k, v) for k, v in pb.get("transacciones", {}).items())
+                tr = st.text_area("Transacciones", value=tr_txt, height=90,
+                                  help="Ej: 1007=37 (Bancolombia), 1507=52 (Nequi). Se usa segun el codigo de banco de cada empleado.")
                 if st.form_submit_button("Guardar parametros Bancolombia", type="primary"):
                     codigos = {}
                     for ln in cod.splitlines():
@@ -576,9 +519,15 @@ if categoria == "Archivos planos bancos":
                             k, v = ln.split("=", 1)
                             if k.strip():
                                 codigos[k.strip().upper()] = v.strip()
+                    transacciones = {}
+                    for ln in tr.splitlines():
+                        if "=" in ln:
+                            k, v = ln.split("=", 1)
+                            if k.strip():
+                                transacciones[k.strip()] = v.strip()
                     planos.set_param(con, "Bancolombia", {
                         "tipo_doc_beneficiario": td.strip(), "tipo_transaccion": tt.strip(),
-                        "codigos": codigos})
+                        "codigos": codigos, "transacciones": transacciones})
                     st.success("Parametros de Bancolombia guardados."); st.rerun()
             st.markdown("**Archivo modelo**")
             nom, blob = planos.modelo_de(con, "Bancolombia")
@@ -630,6 +579,43 @@ if categoria == "Archivos planos bancos":
                 planos.guardar_modelo(con, "Davivienda", mfd.name, mfd.getvalue())
                 st.success("Modelo guardado."); st.rerun()
             st.caption("Estructura - Columnas: " + ", ".join(planos.DAVIVIENDA_COLS))
+
+        with tabC:
+            st.markdown("**Cuentas pagadoras** (por Empresa + Banco)")
+            emps = planos.empresas(con, solo_activas=True)
+            if not emps:
+                st.info("Crea primero una empresa en la seccion Empresas.")
+            else:
+                with st.form("ap_cta_new", clear_on_submit=True):
+                    cc = st.columns(3)
+                    emp = cc[0].selectbox("Empresa", emps, format_func=lambda e: e["nombre"])
+                    banco = cc[1].selectbox("Banco", ["Bancolombia", "Davivienda"])
+                    numero = cc[2].text_input("Numero de cuenta")
+                    cc2 = st.columns(3)
+                    tipo = cc2[0].selectbox("Tipo de cuenta", ["S", "D"])
+                    nitp = cc2[1].text_input("NIT pagador")
+                    desc = cc2[2].text_input("Descripcion del pago", value="Pago nomina")
+                    cc3 = st.columns(2)
+                    tpago = cc3[0].text_input("Tipo de pago (Bancolombia)", value="220")
+                    aplic = cc3[1].text_input("Aplicacion (Bancolombia)", value="I")
+                    if st.form_submit_button("Crear cuenta", type="primary"):
+                        planos.crear_cuenta(con, emp["id"], banco, numero, tipo, nitp, desc, tpago, aplic)
+                        st.success("Cuenta creada."); st.rerun()
+                st.markdown("**Cuentas registradas**")
+                cs = planos.cuentas(con)
+                if cs:
+                    for c in cs:
+                        cols = st.columns([2.6, 1.3, 2.2, 1, 1.1, 1])
+                        cols[0].write(c["empresa_nombre"])
+                        cols[1].write(c["banco"])
+                        cols[2].write("Cta %s (%s) - NIT %s" % (c["numero_cuenta"], c["tipo_cuenta"], c["nit_pagador"]))
+                        cols[3].write("Activa" if c["activa"] else "Inactiva")
+                        if cols[4].button("Inactivar" if c["activa"] else "Activar", key="tg_cta_%d" % c["id"]):
+                            planos.toggle_cuenta(con, c["id"], not c["activa"]); st.rerun()
+                        if cols[5].button("Eliminar", key="del_cta_%d" % c["id"]):
+                            planos.eliminar_cuenta(con, c["id"]); st.success("Cuenta eliminada."); st.rerun()
+                else:
+                    st.caption("Sin cuentas.")
 
     st.stop()
 
