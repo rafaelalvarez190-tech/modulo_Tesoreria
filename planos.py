@@ -28,7 +28,8 @@ DAVIVIENDA_COLS = ["Tipo de Identificacion", "Numero de Identificacion", "Nombre
 
 DEFAULT_PARAMS = {
     "Bancolombia": {"tipo_doc_beneficiario": "1", "tipo_transaccion": "37",
-                    "codigos": {"BANCOLOMBIA": "1007", "NEQUI": "1507"}},
+                    "codigos": {"BANCOLOMBIA": "1007", "NEQUI": "1507"},
+                    "transacciones": {"1007": "37", "1507": "52"}},
     "Davivienda": {"tipo_identificacion": "1", "codigo_banco": "51",
                    "productos": {"DAVIVIENDA": "CA", "DAVIPLATA": "DP"}},
 }
@@ -415,9 +416,11 @@ def construir_filas(con, emp_nom, grupo, filas, fecha_aplicacion):
         ]
         detalle = []
         for f in filas:
+            tt = pb.get("transacciones", {}).get(str(f["codigo_banco"]),
+                                                  pb.get("tipo_transaccion", "37"))
             detalle.append([pb.get("tipo_doc_beneficiario", "1"), f["cedula"],
                             f["nombre"] + (" " + f["apellidos"] if f["apellidos"] else ""),
-                            pb.get("tipo_transaccion", "37"), f["codigo_banco"], f["numero_cuenta"],
+                            tt, f["codigo_banco"], f["numero_cuenta"],
                             "", "", "", "", f["valor"], fecha_txt])
         return {"tipo": "Bancolombia", "header_cols": BANCOLOMBIA_HEADER, "header_vals": header_vals,
                 "detalle_cols": BANCOLOMBIA_DETALLE, "detalle": detalle, "secuencia": seq}
