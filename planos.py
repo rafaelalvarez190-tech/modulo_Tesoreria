@@ -116,7 +116,8 @@ def to_float(v):
     elif "," in s:
         s = s.replace(",", ".") if len(s.split(",")[-1]) == 2 else s.replace(",", "")
     elif "." in s:
-        if s.count(".") > 1 or len(s.split(".")[-1]) == 3:
+        # un solo punto = separador decimal; varios puntos = separador de miles
+        if s.count(".") > 1:
             s = s.replace(".", "")
     try:
         return float(s)
@@ -310,7 +311,7 @@ def procesar(con, nomina_rows, banco_rows, fecha_aplicacion):
     idx = {}
     dup_banco = set()
     for r in banco_rows:
-        ced = solo_digitos(_get(r, "cedula", "cédula", "identificacion", "nit"))
+        ced = solo_digitos(_get(r, "cedula", "cédula", "identificacion", "nit", "dni", "documento", "cc"))
         if not ced:
             continue
         if ced in idx:
@@ -323,9 +324,12 @@ def procesar(con, nomina_rows, banco_rows, fecha_aplicacion):
     vistos = set()
 
     for r in nomina_rows:
-        ced = solo_digitos(_get(r, "cedula", "cédula", "identificacion"))
-        nombre = str(_get(r, "nombre")).strip()
-        valor = to_float(_get(r, "valor_pagar", "valor", "valor a pagar", "valor_pago"))
+        ced = solo_digitos(_get(r, "cedula", "cédula", "identificacion", "dni", "documento",
+                                  "cc", "nit", "no documento", "numero documento"))
+        nombre = str(_get(r, "nombre", "nombrecompleto", "nombre completo", "nombre_completo",
+                          "nombres")).strip()
+        valor = to_float(_get(r, "valor_pagar", "valor", "valor a pagar", "valor_pago",
+                              "neto", "valor neto", "valor_neto", "pago"))
         emp_nom = str(_get(r, "empresa")).strip()
         if not ced:
             errores.append({"cedula": "", "nombre": nombre, "empresa": emp_nom, "motivo": "Cedula vacia en nomina"})
