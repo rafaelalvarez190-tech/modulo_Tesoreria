@@ -126,6 +126,37 @@ def to_float(v):
         return 0.0
 
 
+PARTICULAS = {"DE", "DEL", "LA", "LAS", "LOS", "DI", "DA", "DO", "VAN", "VON",
+              "MC", "MAC", "SAN", "SANTA", "Y"}
+
+
+def split_nombre_apellido(full):
+    """Separa un nombre completo en (nombres, apellidos) asumiendo 2 apellidos,
+    absorbiendo particulas (de, del, la, los...). Ej: 'sandra milena montes de hoyos'
+    -> ('sandra milena', 'montes de hoyos')."""
+    toks = [t for t in str(full or "").split() if t]
+    if not toks:
+        return "", ""
+    unidades, pend = [], []
+    for t in toks:
+        if t.upper() in PARTICULAS:
+            pend.append(t)
+        elif pend:
+            unidades.append(" ".join(pend + [t])); pend = []
+        else:
+            unidades.append(t)
+    if pend:
+        if unidades:
+            unidades[-1] = unidades[-1] + " " + " ".join(pend)
+        else:
+            unidades = [" ".join(pend)]
+    if len(unidades) == 1:
+        return unidades[0], ""
+    if len(unidades) == 2:
+        return unidades[0], unidades[1]
+    return " ".join(unidades[:-2]), " ".join(unidades[-2:])
+
+
 # ---- Maestros ----
 def empresas(con, solo_activas=False):
     sql = "SELECT * FROM ap_empresa"
@@ -363,12 +394,12 @@ def procesar(con, nomina_rows, banco_rows, fecha_aplicacion):
         if not tipo_cuenta and grupo == "Davivienda":
             # producto se infiere de la entidad; tipo_cuenta no es obligatorio para Davivienda
             pass
-        nombre_b = str(_get(b, "nombre")).strip() or nombre
+        nombre_full = str(_get(b, "nombre", "nombres", "nombrecompleto")).strip() or nombre
         apellidos_b = str(_get(b, "apellidos", "apellido")).strip()
-        if not apellidos_b:
-            partes = nombre_b.split()
-            if len(partes) > 1:
-                nombre_b, apellidos_b = partes[0], " ".join(partes[1:])
+        if apellidos_b:
+            nombre_b = nombre_full
+        else:
+            nombre_b, apellidos_b = split_nombre_apellido(nombre_full)
         emp = emp_by_nombre.get(norm(emp_nom))
         key = (emp_nom, grupo)
         grupos.setdefault(key, []).append({
@@ -418,8 +449,9 @@ def construir_filas(con, emp_nom, grupo, filas, fecha_aplicacion):
         for f in filas:
             tt = pb.get("transacciones", {}).get(str(f["codigo_banco"]),
                                                   pb.get("tipo_transaccion", "37"))
-            detalle.append([pb.get("tipo_doc_beneficiario", "1"), f["cedula"],
-                            f["nombre"] + (" " + f["apellidos"] if f["apellidos"] else ""),
+            nom_full = (f["nombre"] + (" " + f["apellidos"] if f["apellidos"] else "")).strip()
+            nom_full = nom_full[:30]  # Bancolombia: maximo 30 caracteres (incluye espacios)
+            detalle.append([pb.get("tipo_doc_beneficiario", "1"), f["cedula"], nom_full,
                             tt, f["codigo_banco"], f["numero_cuenta"],
                             "", "", "", "", f["valor"], fecha_txt])
         return {"tipo": "Bancolombia", "header_cols": BANCOLOMBIA_HEADER, "header_vals": header_vals,
