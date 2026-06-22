@@ -242,8 +242,10 @@ def log_cambio(con, factura_id, campo, antes, despues, usuario, motivo=""):
 
 
 # --------------------------------------------------------------------------
-def procesar_carga(con, filename, raw, usuario="demo"):
-    """Procesa un archivo. Devuelve (resumen_dict, errores_list) o lanza ValueError."""
+def procesar_carga(con, filename, raw, usuario="demo", marcar_faltantes=True):
+    """Procesa un archivo. Devuelve (resumen_dict, errores_list) o lanza ValueError.
+    Si marcar_faltantes=True, las facturas activas de las empresas presentes en el archivo
+    que ya no vienen se dan por pagadas (Actualizada por archivo plano)."""
     rows, cols, err = parse_bytes(filename, raw)
     if err:
         raise ValueError(err)
@@ -261,6 +263,7 @@ def procesar_carga(con, filename, raw, usuario="demo"):
     nuevas = actualizadas = sin_cambios = rechazadas = 0
     errores = []
     vistas = set()
+    empresas_file = set()
 
     for i, r in enumerate(rows, start=2):
         empresa = (r.get("empresa") or "").strip()
@@ -276,6 +279,7 @@ def procesar_carga(con, filename, raw, usuario="demo"):
             errores.append((i, "Duplicado dentro del mismo archivo", lk))
             continue
         vistas.add(lk)
+        empresas_file.add(norm(empresa))
         # La CxP suele exportarse en negativo desde el ERP: usamos el valor absoluto.
         saldo = abs(to_float(r.get("saldo_actual")))
         h = row_hash(r)
@@ -304,6 +308,32 @@ def procesar_carga(con, filename, raw, usuario="demo"):
                 (saldo, fv, periodo, h, now(), existente["id"]))
             actualizadas += 1
 
+    pagadas_archivo = 0
+    if marcar_faltantes and empresas_file:
+        comprobante = "PLANO-" + str(carga_id)
+        candidatas = con.execute(
+            "SELECT * FROM factura WHERE activo=1 AND estado != 'Anulada'").fetchall()
+        for r in candidatas:
+            if norm(r["empresa"]) not in empresas_file:
+                continue
+            if r["llave_unica"] in vistas:
+                continue
+            saldo_tes = round((r["valor_original"] or 0) - (r["total_abonado"] or 0), 2)
+            if saldo_tes <= 0.001:
+                continue
+            con.execute(
+                "INSERT INTO pago (factura_id, fecha_pago, empresa, banco, cuenta_bancaria, medio_pago,"
+                " numero_comprobante, valor_pagado, notas, usuario, created_at, anulado)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,0)",
+                (r["id"], today().isoformat(), r["empresa"], "", "", "Archivo plano",
+                 comprobante, saldo_tes, "Actualizada por archivo plano (no vino en la carga)",
+                 usuario, now()))
+            log_cambio(con, r["id"], "estado", r["estado"], "Pagada", usuario,
+                       "Actualizada por archivo plano (carga " + str(carga_id) + ")")
+            con.execute("UPDATE factura SET total_abonado=?, estado='Pagada' WHERE id=?",
+                        (round(r["valor_original"] or 0, 2), r["id"]))
+            pagadas_archivo += 1
+
     for (fila, motivo, dato) in errores:
         con.execute("INSERT INTO error_carga (carga_id, fila, motivo, dato) VALUES (?,?,?,?)",
                     (carga_id, fila, motivo, dato))
@@ -311,7 +341,8 @@ def procesar_carga(con, filename, raw, usuario="demo"):
                 (nuevas, actualizadas, sin_cambios, rechazadas, carga_id))
     con.commit()
     resumen = dict(carga_id=carga_id, leidas=len(rows), nuevas=nuevas,
-                   actualizadas=actualizadas, sin_cambios=sin_cambios, rechazadas=rechazadas)
+                   actualizadas=actualizadas, sin_cambios=sin_cambios, rechazadas=rechazadas,
+                   pagadas_archivo=pagadas_archivo)
     return resumen, errores
 
 
