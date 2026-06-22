@@ -679,20 +679,31 @@ elif pagina == "Carga masiva":
     st.caption("Sube el reporte (Excel .xlsx o CSV). El sistema valida estructura, evita duplicados "
                "y consolida contra el historico mediante la llave unica empresa|NIT|factura.")
     archivo = st.file_uploader("Selecciona tu archivo", type=["csv", "xlsx", "xls"])
+    marcar = st.checkbox(
+        "Dar por pagadas las facturas que ya no vienen en el archivo (Actualizada por archivo plano)",
+        value=True,
+        help="Solo afecta a las empresas presentes en el archivo cargado. Las facturas activas de "
+             "esas empresas que no aparezcan se marcan como Pagadas y quedan en Pagos.")
     if archivo is not None:
         if st.button("Validar y cargar", type="primary"):
             try:
-                resumen, errores = core.procesar_carga(con, archivo.name, archivo.getvalue(), USUARIO)
+                resumen, errores = core.procesar_carga(con, archivo.name, archivo.getvalue(),
+                                                       USUARIO, marcar_faltantes=marcar)
                 msg = (f"Carga procesada: {resumen['leidas']} leidas - {resumen['nuevas']} nuevas - "
                        f"{resumen['actualizadas']} actualizadas - {resumen['sin_cambios']} sin cambios - "
                        f"{resumen['rechazadas']} rechazadas.")
                 (st.success if resumen["rechazadas"] == 0 else st.warning)(msg)
-                cc = st.columns(5)
+                cc = st.columns(6)
                 cc[0].metric("Leidas", resumen["leidas"])
                 cc[1].metric("Nuevas", resumen["nuevas"])
                 cc[2].metric("Actualizadas", resumen["actualizadas"])
                 cc[3].metric("Sin cambios", resumen["sin_cambios"])
                 cc[4].metric("Rechazadas", resumen["rechazadas"])
+                cc[5].metric("Pagadas x archivo", resumen.get("pagadas_archivo", 0))
+                if resumen.get("pagadas_archivo", 0):
+                    st.info("%d factura(s) ya no venian en el archivo: se marcaron como Pagadas "
+                            "(Actualizada por archivo plano) y quedan en Pagos."
+                            % resumen["pagadas_archivo"])
                 if errores:
                     st.subheader("Log de errores")
                     st.dataframe(pd.DataFrame(errores, columns=["Fila", "Motivo", "Dato"]),
