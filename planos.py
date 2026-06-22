@@ -512,7 +512,8 @@ def guardar_ejecucion(con, proc, usuario="demo"):
         if grupo == "Bancolombia" and emp:
             seq = consecutivo_siguiente(con, emp["id"], "Bancolombia")
             est["header_vals"][3] = seq  # actualizar secuencia real
-        fname = "{}_{}_{}.xlsx".format(grupo, _slug(emp_nom), str(proc["fecha_aplicacion"]).replace("-", ""))
+        base = "Plantilla-Pagos-Nomina-o-Proveedores" if grupo == "Davivienda" else grupo
+        fname = "{}_{}_{}.xlsx".format(base, _slug(emp_nom), str(proc["fecha_aplicacion"]).replace("-", ""))
         valor_total = round(sum(f["valor"] for f in filas), 2)
         con.execute(
             "INSERT INTO ap_archivo (ejecucion_id, empresa, banco, n_empleados, valor_total,"
