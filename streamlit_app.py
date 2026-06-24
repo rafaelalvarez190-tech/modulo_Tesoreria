@@ -382,20 +382,40 @@ if categoria == "Archivos planos bancos":
         f_ban = c2.file_uploader("Informacion bancaria (cedula, nombre, tipo_cuenta, numero_cuenta, entidad_bancaria)",
                                  type=["csv", "xlsx", "xls"], key="ap_ban")
         fecha_ap = st.date_input("Fecha de aplicacion", value=dt.date.today(), format="YYYY-MM-DD")
+
+        seleccion = {}
+        nrows = brows = None
+        err_lectura = None
+        if f_nom is not None and f_ban is not None:
+            nrows, _, e1 = planos.leer_tabla(f_nom.name, f_nom.getvalue())
+            brows, _, e2 = planos.leer_tabla(f_ban.name, f_ban.getvalue())
+            err_lectura = e1 or e2
+            if not err_lectura:
+                conflictos = planos.conflictos_bancarios(brows)
+                if conflictos:
+                    st.warning("Se encontraron %d cedula(s) con cuentas diferentes en el archivo "
+                               "bancario. Selecciona cual usar para cada una antes de ejecutar."
+                               % len(conflictos))
+                    for ced, ops in conflictos.items():
+                        labels = {o["sig"]: "%s - %s - cuenta %s" % (o["entidad"], o["tipo_cuenta"], o["numero_cuenta"])
+                                  for o in ops}
+                        nombre = ops[0].get("nombre", "")
+                        sig = st.radio("Cedula %s  %s" % (ced, ("- " + nombre) if nombre else ""),
+                                       list(labels.keys()), format_func=lambda x: labels[x],
+                                       key="conf_%s" % ced)
+                        seleccion[ced] = sig
+
         if st.button("Ejecutar proceso", type="primary"):
-            if not f_nom or not f_ban:
+            if f_nom is None or f_ban is None:
                 st.error("Debes cargar los dos archivos.")
+            elif err_lectura:
+                st.error(err_lectura)
             else:
-                nrows, _, e1 = planos.leer_tabla(f_nom.name, f_nom.getvalue())
-                brows, _, e2 = planos.leer_tabla(f_ban.name, f_ban.getvalue())
-                if e1 or e2:
-                    st.error(e1 or e2)
-                else:
-                    proc = planos.procesar(con, nrows, brows, fecha_ap.isoformat())
-                    eid, _arch = planos.guardar_ejecucion(con, proc, USUARIO)
-                    st.session_state["ap_eid"] = eid
-                    st.session_state["ap_err"] = proc["errores"]
-                    st.rerun()
+                proc = planos.procesar(con, nrows, brows, fecha_ap.isoformat(), seleccion=seleccion)
+                eid, _arch = planos.guardar_ejecucion(con, proc, USUARIO)
+                st.session_state["ap_eid"] = eid
+                st.session_state["ap_err"] = proc["errores"]
+                st.rerun()
 
         eid = st.session_state.get("ap_eid")
         if eid:
