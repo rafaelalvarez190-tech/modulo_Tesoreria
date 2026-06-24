@@ -336,6 +336,46 @@ def clasificar(con, entidad):
     return None, None, None
 
 
+def cedulas_duplicadas_nomina(nomina_rows):
+    """Novedad informativa: devuelve [{cedula, nombre, veces, empresas}] para las cedulas
+    que aparecen mas de una vez en el archivo de nomina."""
+    conteo = {}
+    for r in nomina_rows or []:
+        ced = solo_digitos(_get(r, "cedula", "cédula", "identificacion", "dni", "documento",
+                                  "cc", "nit", "no documento", "numero documento"))
+        if not ced:
+            continue
+        nombre = str(_get(r, "nombre", "nombrecompleto", "nombre completo", "nombre_completo",
+                          "nombres")).strip()
+        emp = str(_get(r, "empresa")).strip()
+        d = conteo.setdefault(ced, {"cedula": ced, "nombre": nombre, "veces": 0, "empresas": []})
+        d["veces"] += 1
+        if emp and emp not in d["empresas"]:
+            d["empresas"].append(emp)
+        if not d["nombre"] and nombre:
+            d["nombre"] = nombre
+    return [v for v in conteo.values() if v["veces"] > 1]
+
+
+def empresas_sin_cuenta(con, proc):
+    """Validacion informativa de empresas pagadoras: revisa cada grupo (empresa+banco) del
+    proceso y devuelve [{empresa, banco, motivo}] cuando la empresa no existe en el maestro
+    o no tiene una cuenta pagadora creada para ese banco."""
+    faltantes = []
+    emp_by_nombre = {norm(e["nombre"]): e for e in empresas(con)}
+    for (emp_nom, grupo) in proc.get("grupos", {}).keys():
+        emp = emp_by_nombre.get(norm(emp_nom))
+        if not emp:
+            faltantes.append({"empresa": emp_nom, "banco": grupo,
+                              "motivo": "Empresa pagadora no creada en el maestro"})
+            continue
+        cuenta = cuenta_de(con, emp["id"], grupo)
+        if not cuenta:
+            faltantes.append({"empresa": emp_nom, "banco": grupo,
+                              "motivo": "Sin cuenta pagadora configurada para " + grupo})
+    return faltantes
+
+
 def conflictos_bancarios(banco_rows):
     """Devuelve {cedula: [opciones]} para cedulas que aparecen con cuentas DIFERENTES
     (distinto tipo_cuenta / numero_cuenta / entidad). Cada opcion: sig, tipo_cuenta,
