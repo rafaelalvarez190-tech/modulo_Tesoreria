@@ -336,20 +336,59 @@ def clasificar(con, entidad):
     return None, None, None
 
 
-# ---- Proceso de dispersion ----
-def procesar(con, nomina_rows, banco_rows, fecha_aplicacion):
-    """Une nomina + bancaria por cedula, valida y arma los grupos empresa+banco.
-    Devuelve dict con grupos, errores y resumen (sin guardar todavia)."""
-    # indice bancario por cedula
-    idx = {}
-    dup_banco = set()
+def conflictos_bancarios(banco_rows):
+    """Devuelve {cedula: [opciones]} para cedulas que aparecen con cuentas DIFERENTES
+    (distinto tipo_cuenta / numero_cuenta / entidad). Cada opcion: sig, tipo_cuenta,
+    numero_cuenta, entidad, nombre."""
+    op = {}
     for r in banco_rows:
         ced = solo_digitos(_get(r, "cedula", "cédula", "identificacion", "nit", "dni", "documento", "cc"))
         if not ced:
             continue
-        if ced in idx:
-            dup_banco.add(ced)
-        idx[ced] = r
+        tipo = str(_get(r, "tipo_cuenta", "tipo cuenta")).strip()
+        numero = str(_get(r, "numero_cuenta", "numero cuenta", "num_cuenta", "cuenta")).strip()
+        entidad = str(_get(r, "entidad_bancaria", "entidad", "banco")).strip()
+        nombre = str(_get(r, "nombre", "nombres", "nombrecompleto")).strip()
+        sig = "%s|%s|%s" % (norm(tipo), norm(numero), norm(entidad))
+        op.setdefault(ced, {})
+        if sig not in op[ced]:
+            op[ced][sig] = {"sig": sig, "tipo_cuenta": tipo, "numero_cuenta": numero,
+                            "entidad": entidad, "nombre": nombre}
+    return {ced: list(v.values()) for ced, v in op.items() if len(v) > 1}
+
+
+def _indice_bancario(banco_rows, seleccion=None):
+    """Construye {cedula: row} eligiendo, en caso de cuentas diferentes, la opcion
+    indicada en seleccion={cedula: sig}; si no hay seleccion, toma la primera."""
+    seleccion = seleccion or {}
+    op = {}
+    for r in banco_rows:
+        ced = solo_digitos(_get(r, "cedula", "cédula", "identificacion", "nit", "dni", "documento", "cc"))
+        if not ced:
+            continue
+        tipo = str(_get(r, "tipo_cuenta", "tipo cuenta")).strip()
+        numero = str(_get(r, "numero_cuenta", "numero cuenta", "num_cuenta", "cuenta")).strip()
+        entidad = str(_get(r, "entidad_bancaria", "entidad", "banco")).strip()
+        sig = "%s|%s|%s" % (norm(tipo), norm(numero), norm(entidad))
+        op.setdefault(ced, {})
+        if sig not in op[ced]:
+            op[ced][sig] = r
+    idx = {}
+    for ced, sigs in op.items():
+        if len(sigs) == 1:
+            idx[ced] = list(sigs.values())[0]
+        else:
+            chosen = seleccion.get(ced)
+            idx[ced] = sigs[chosen] if chosen in sigs else list(sigs.values())[0]
+    return idx
+
+
+# ---- Proceso de dispersion ----
+def procesar(con, nomina_rows, banco_rows, fecha_aplicacion, seleccion=None):
+    """Une nomina + bancaria por cedula, valida y arma los grupos empresa+banco.
+    'seleccion' = {cedula: sig} para resolver cedulas con cuentas diferentes.
+    Devuelve dict con grupos, errores y resumen (sin guardar todavia)."""
+    idx = _indice_bancario(banco_rows, seleccion)
 
     emp_by_nombre = {norm(e["nombre"]): e for e in empresas(con)}
     grupos = {}   # (empresa_nombre, grupo_banco) -> list de detalle
@@ -409,9 +448,6 @@ def procesar(con, nomina_rows, banco_rows, fecha_aplicacion):
             "tipo_cuenta": tipo_cuenta, "codigo_banco": codigo, "producto": producto,
             "entidad": entidad, "empresa_obj": emp,
         })
-
-    for ced in dup_banco:
-        errores.append({"cedula": ced, "nombre": "", "empresa": "", "motivo": "Cedula duplicada en archivo bancario"})
 
     resumen = []
     for (emp_nom, grupo), filas in grupos.items():
