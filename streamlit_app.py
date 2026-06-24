@@ -391,6 +391,15 @@ if categoria == "Archivos planos bancos":
             brows, _, e2 = planos.leer_tabla(f_ban.name, f_ban.getvalue())
             err_lectura = e1 or e2
             if not err_lectura:
+                dups = planos.cedulas_duplicadas_nomina(nrows)
+                if dups:
+                    st.warning("Novedad: %d cedula(s) aparecen repetidas en el archivo de "
+                               "nomina. Revisa antes de ejecutar (en el proceso solo se toma "
+                               "el primer registro de cada cedula)." % len(dups))
+                    st.dataframe(pd.DataFrame([{
+                        "Cedula": d["cedula"], "Nombre": d["nombre"], "Veces": d["veces"],
+                        "Empresas": ", ".join(d["empresas"])} for d in dups]),
+                        use_container_width=True, hide_index=True)
                 conflictos = planos.conflictos_bancarios(brows)
                 if conflictos:
                     st.warning("Se encontraron %d cedula(s) con cuentas diferentes en el archivo "
@@ -415,6 +424,7 @@ if categoria == "Archivos planos bancos":
                 eid, _arch = planos.guardar_ejecucion(con, proc, USUARIO)
                 st.session_state["ap_eid"] = eid
                 st.session_state["ap_err"] = proc["errores"]
+                st.session_state["ap_sin_cuenta"] = planos.empresas_sin_cuenta(con, proc)
                 st.rerun()
 
         eid = st.session_state.get("ap_eid")
@@ -427,6 +437,14 @@ if categoria == "Archivos planos bancos":
             kk[1].metric("Empleados", sum(a["n_empleados"] for a in arch))
             kk[2].metric("Valor dispersado", money(sum(a["valor_total"] for a in arch)))
             kk[3].metric("Inconsistencias", len(errs))
+            sin_cuenta = st.session_state.get("ap_sin_cuenta", [])
+            if sin_cuenta:
+                st.warning("Validacion de empresas pagadoras: %d empresa(s)+banco no tienen "
+                           "cuenta pagadora configurada. Los archivos se generaron, pero el "
+                           "encabezado (NIT pagador, cuenta a debitar) puede salir incompleto. "
+                           "Crea la cuenta en Parametros Bancarios > Cuentas Pagadoras."
+                           % len(sin_cuenta))
+                st.dataframe(pd.DataFrame(sin_cuenta), use_container_width=True, hide_index=True)
             if arch:
                 st.markdown("**Archivos generados (Empresa + Banco)**")
                 st.dataframe(pd.DataFrame([{
