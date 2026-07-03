@@ -281,6 +281,7 @@ def _estado_proveedor(con):
 
     df = pd.DataFrame([{
         "Proveedor": p["proveedor"], "NIT": p["nit"], "Facturas": p["n"],
+        "Tipo negociacion": p.get("tipos", "-"),
         "Cartera total": money(p["saldo"]), "Vencido": money(p.get("vencido", 0)),
         "% vencido": round(p.get("vencido", 0) / p["saldo"] * 100, 1) if p["saldo"] else 0.0,
         "Estado": "En mora" if p.get("vencido", 0) > 0 else "Al dia",
@@ -707,6 +708,34 @@ if pagina == "Dashboard":
                 dem = pd.DataFrame({"Empresa": list(d["empresas"].keys()),
                                     "Saldo": list(d["empresas"].values())}).set_index("Empresa")
                 st.bar_chart(dem, color=NAVY, height=260, horizontal=True)
+
+        st.write("")
+        st.subheader("Por tipo de negociacion")
+        neg_c = d.get("neg_cartera", {})
+        neg_p = d.get("neg_pagos", {})
+        tipos = list(dict.fromkeys(list(neg_c.keys()) + list(neg_p.keys())))
+        if tipos:
+            tn1, tn2 = st.columns(2)
+            with tn1:
+                st.caption("Cartera pendiente por tipo de negociacion")
+                dc = pd.DataFrame({"Tipo": list(neg_c.keys()),
+                                   "Cartera": list(neg_c.values())}).set_index("Tipo")
+                if not dc.empty:
+                    st.bar_chart(dc, color=BLUE, height=260, horizontal=True)
+            with tn2:
+                st.caption("Pagos realizados por tipo de negociacion")
+                dp = pd.DataFrame({"Tipo": list(neg_p.keys()),
+                                   "Pagos": list(neg_p.values())}).set_index("Tipo")
+                if not dp.empty:
+                    st.bar_chart(dp, color="#2e7d32", height=260, horizontal=True)
+            tabla = pd.DataFrame([{
+                "Tipo de negociacion": t,
+                "Cartera pendiente": money(neg_c.get(t, 0)),
+                "Pagos realizados": money(neg_p.get(t, 0)),
+            } for t in tipos])
+            st.dataframe(tabla, use_container_width=True, hide_index=True)
+        else:
+            st.caption("Aun no hay facturas con tipo de negociacion.")
 
 
 # ===============================================================================
