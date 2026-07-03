@@ -22,7 +22,7 @@ EXPECTED_COLS = [
     "fecha_actualizacion", "empresa", "periodo", "codigo_cuenta", "nombre_cuenta",
     "identificacion", "proveedor", "factura", "fecha_vencimiento", "dias_por_vencer",
     "treinta_dias", "sesenta_dias", "noventa_dias", "mas_de_noventa",
-    "saldo_actual", "saldo_anterior", "debitos", "creditos",
+    "saldo_actual", "saldo_anterior", "debitos", "creditos", "tipo_negociacion",
 ]
 REQUIRED_COLS = ["empresa", "identificacion", "proveedor", "factura", "saldo_actual"]
 
@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS factura (
     estado TEXT DEFAULT 'Pendiente',
     fecha_estimada_pago TEXT,
     notas TEXT,
+    tipo_negociacion TEXT,
     hash_fila TEXT,
     fecha_primera_carga TEXT,
     fecha_ultima_actualizacion TEXT,
@@ -112,6 +113,7 @@ def init_db(con):
     con.executescript(SCHEMA)
     _ensure_column(con, "pago", "anulado", "INTEGER DEFAULT 0")
     _ensure_column(con, "anticipo", "anulado", "INTEGER DEFAULT 0")
+    _ensure_column(con, "factura", "tipo_negociacion", "TEXT")
     con.commit()
 
 
@@ -163,7 +165,7 @@ def to_float(v):
 
 def row_hash(d):
     base = "|".join(str(d.get(c, "")) for c in
-                     ["saldo_actual", "fecha_vencimiento", "periodo",
+                     ["saldo_actual", "fecha_vencimiento", "periodo", "tipo_negociacion",
                       "treinta_dias", "sesenta_dias", "noventa_dias", "mas_de_noventa"])
     return hashlib.sha256(base.encode("utf-8")).hexdigest()
 
@@ -285,16 +287,17 @@ def procesar_carga(con, filename, raw, usuario="demo", marcar_faltantes=True):
         h = row_hash(r)
         fv = (r.get("fecha_vencimiento") or "").strip()
         periodo = (r.get("periodo") or "").strip()
+        tneg = (r.get("tipo_negociacion") or "").strip()
         existente = con.execute("SELECT * FROM factura WHERE llave_unica=?", (lk,)).fetchone()
         if existente is None:
             con.execute(
                 "INSERT INTO factura (llave_unica, empresa, periodo, codigo_cuenta, nombre_cuenta,"
                 " identificacion, proveedor, numero_factura, fecha_vencimiento, valor_original,"
-                " saldo_contable, total_abonado, estado, hash_fila, fecha_primera_carga,"
-                " fecha_ultima_actualizacion, activo) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+                " saldo_contable, total_abonado, estado, tipo_negociacion, hash_fila, fecha_primera_carga,"
+                " fecha_ultima_actualizacion, activo) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
                 (lk, empresa, periodo, (r.get("codigo_cuenta") or "").strip(),
                  (r.get("nombre_cuenta") or "").strip(), nit, (r.get("proveedor") or "").strip(),
-                 numfac, fv, saldo, saldo, 0, "Pendiente", h, now(), now()))
+                 numfac, fv, saldo, saldo, 0, "Pendiente", tneg, h, now(), now()))
             nuevas += 1
         elif existente["hash_fila"] == h:
             sin_cambios += 1
@@ -304,8 +307,8 @@ def procesar_carga(con, filename, raw, usuario="demo", marcar_faltantes=True):
                            existente["saldo_contable"], saldo, usuario, "Carga de archivo")
             con.execute(
                 "UPDATE factura SET saldo_contable=?, fecha_vencimiento=?, periodo=?,"
-                " hash_fila=?, fecha_ultima_actualizacion=? WHERE id=?",
-                (saldo, fv, periodo, h, now(), existente["id"]))
+                " tipo_negociacion=?, hash_fila=?, fecha_ultima_actualizacion=? WHERE id=?",
+                (saldo, fv, periodo, tneg, h, now(), existente["id"]))
             actualizadas += 1
 
     pagadas_archivo = 0
@@ -487,12 +490,19 @@ def proveedores_con_saldo(con, empresa=""):
             continue
         k = f["identificacion"]
         if k not in agg:
-            agg[k] = {"nit": k, "proveedor": f["proveedor"], "n": 0, "saldo": 0.0, "vencido": 0.0}
+            agg[k] = {"nit": k, "proveedor": f["proveedor"], "n": 0, "saldo": 0.0,
+                      "vencido": 0.0, "tipos": set()}
         agg[k]["n"] += 1
         agg[k]["saldo"] = round(agg[k]["saldo"] + f["saldo_tesoreria"], 2)
+        tn = (f.get("tipo_negociacion") or "").strip()
+        if tn:
+            agg[k]["tipos"].add(tn)
         if f["vencida"]:
             agg[k]["vencido"] = round(agg[k]["vencido"] + f["saldo_tesoreria"], 2)
-    return sorted(agg.values(), key=lambda x: -x["saldo"])
+    out = sorted(agg.values(), key=lambda x: -x["saldo"])
+    for p in out:
+        p["tipos"] = ", ".join(sorted(p["tipos"])) if p["tipos"] else "-"
+    return out
 
 
 def _orden_antiguedad(f):
@@ -819,6 +829,18 @@ def dashboard_data(con):
     empresas = {}
     for f in activas:
         empresas[f["empresa"]] = round(empresas.get(f["empresa"], 0) + f["saldo_tesoreria"], 2)
+    # Cartera pendiente por tipo de negociacion.
+    neg_cartera = {}
+    for f in activas:
+        tn = (f.get("tipo_negociacion") or "").strip() or "(Sin tipo)"
+        neg_cartera[tn] = round(neg_cartera.get(tn, 0) + f["saldo_tesoreria"], 2)
+    # Pagos realizados por tipo de negociacion (segun la factura pagada).
+    neg_pagos = {}
+    for r in con.execute(
+            "SELECT COALESCE(NULLIF(TRIM(f.tipo_negociacion),''),'(Sin tipo)') tn, "
+            "SUM(p.valor_pagado) v FROM pago p JOIN factura f ON f.id=p.factura_id "
+            "WHERE p.anulado=0 GROUP BY tn").fetchall():
+        neg_pagos[r["tn"]] = round((r["v"] or 0), 2)
     kpis = dict(
         total_cxp=round(total_cxp, 2), total_pagado=round(total_pagado, 2),
         total_anticipo=round(total_anticipo, 2), total_pendiente=round(total_pendiente, 2),
@@ -828,4 +850,6 @@ def dashboard_data(con):
         monto_por_vencer=round(sum(f["saldo_tesoreria"] for f in por_vencer), 2))
     return dict(kpis=kpis, aging={k: round(v, 2) for k, v in aging.items()},
                 estados=estados_count, flujo=flujo,
-                empresas={k: v for k, v in sorted(empresas.items(), key=lambda x: -x[1])})
+                empresas={k: v for k, v in sorted(empresas.items(), key=lambda x: -x[1])},
+                neg_cartera={k: v for k, v in sorted(neg_cartera.items(), key=lambda x: -x[1])},
+                neg_pagos={k: v for k, v in sorted(neg_pagos.items(), key=lambda x: -x[1])})
