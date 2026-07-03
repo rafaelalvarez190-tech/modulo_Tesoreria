@@ -6,6 +6,7 @@ Despliegue: GitHub + https://share.streamlit.io
 import io
 import datetime as dt
 import pandas as pd
+import altair as alt
 import streamlit as st
 
 import core
@@ -34,6 +35,31 @@ def money(v):
         return "$" + f"{float(v):,.0f}".replace(",", ".")
     except Exception:
         return v
+
+
+def _chart_moneda(labels, values, color, cat_title, horizontal=True, height=260):
+    """Grafica de barras con tooltip en formato moneda ($ con separador de miles)."""
+    df = pd.DataFrame({"cat": [str(x) for x in labels], "val": [float(v or 0) for v in values]})
+    df["Valor"] = df["val"].apply(money)
+    tt = [alt.Tooltip("cat:N", title=cat_title), alt.Tooltip("Valor:N", title="Valor")]
+    if horizontal:
+        enc = dict(y=alt.Y("cat:N", sort="-x", title=cat_title, axis=alt.Axis(labelLimit=220)),
+                   x=alt.X("val:Q", title="Valor", axis=alt.Axis(format="~s")))
+    else:
+        enc = dict(x=alt.X("cat:N", sort="-y", title=cat_title),
+                   y=alt.Y("val:Q", title="Valor", axis=alt.Axis(format="~s")))
+    return alt.Chart(df).mark_bar(color=color).encode(tooltip=tt, **enc).properties(height=height)
+
+
+def _chart_moneda_linea(pares, color, height=260):
+    """Grafica de linea (flujo diario) con tooltip en formato moneda."""
+    df = pd.DataFrame(pares, columns=["Fecha", "val"])
+    df["Valor"] = df["val"].apply(money)
+    tt = [alt.Tooltip("Fecha:N", title="Fecha"), alt.Tooltip("Valor:N", title="Valor")]
+    base = alt.Chart(df).encode(
+        x=alt.X("Fecha:N", title="Fecha"),
+        y=alt.Y("val:Q", title="Valor", axis=alt.Axis(format="~s")), tooltip=tt)
+    return (base.mark_line(color=color) + base.mark_point(color=color, size=45)).properties(height=height)
 
 
 def _detalle_factura(con, fid):
@@ -686,9 +712,8 @@ if pagina == "Dashboard":
         g1, g2 = st.columns(2)
         with g1:
             st.subheader("Antiguedad de saldos")
-            df = pd.DataFrame({"Rango": list(d["aging"].keys()),
-                               "Saldo": list(d["aging"].values())}).set_index("Rango")
-            st.bar_chart(df, color=BLUE, height=260)
+            st.altair_chart(_chart_moneda(list(d["aging"].keys()), list(d["aging"].values()),
+                                          BLUE, "Rango", horizontal=False), use_container_width=True)
         with g2:
             st.subheader("Facturas por estado")
             de = pd.DataFrame({"Estado": list(d["estados"].keys()),
@@ -698,16 +723,14 @@ if pagina == "Dashboard":
         with g3:
             st.subheader("Flujo de pagos diario")
             if d["flujo"]:
-                dfl = pd.DataFrame(d["flujo"], columns=["Fecha", "Pagos"]).set_index("Fecha")
-                st.line_chart(dfl, color=BLUE, height=260)
+                st.altair_chart(_chart_moneda_linea(d["flujo"], BLUE), use_container_width=True)
             else:
                 st.caption("Aun no hay pagos registrados.")
         with g4:
             st.subheader("Saldo por empresa")
             if d["empresas"]:
-                dem = pd.DataFrame({"Empresa": list(d["empresas"].keys()),
-                                    "Saldo": list(d["empresas"].values())}).set_index("Empresa")
-                st.bar_chart(dem, color=NAVY, height=260, horizontal=True)
+                st.altair_chart(_chart_moneda(list(d["empresas"].keys()), list(d["empresas"].values()),
+                                              NAVY, "Empresa", horizontal=True), use_container_width=True)
 
         st.write("")
         st.subheader("Por tipo de negociacion")
@@ -718,16 +741,14 @@ if pagina == "Dashboard":
             tn1, tn2 = st.columns(2)
             with tn1:
                 st.caption("Cartera pendiente por tipo de negociacion")
-                dc = pd.DataFrame({"Tipo": list(neg_c.keys()),
-                                   "Cartera": list(neg_c.values())}).set_index("Tipo")
-                if not dc.empty:
-                    st.bar_chart(dc, color=BLUE, height=260, horizontal=True)
+                if neg_c:
+                    st.altair_chart(_chart_moneda(list(neg_c.keys()), list(neg_c.values()),
+                                                  BLUE, "Tipo", horizontal=True), use_container_width=True)
             with tn2:
                 st.caption("Pagos realizados por tipo de negociacion")
-                dp = pd.DataFrame({"Tipo": list(neg_p.keys()),
-                                   "Pagos": list(neg_p.values())}).set_index("Tipo")
-                if not dp.empty:
-                    st.bar_chart(dp, color="#2e7d32", height=260, horizontal=True)
+                if neg_p:
+                    st.altair_chart(_chart_moneda(list(neg_p.keys()), list(neg_p.values()),
+                                                  "#2e7d32", "Tipo", horizontal=True), use_container_width=True)
             tabla = pd.DataFrame([{
                 "Tipo de negociacion": t,
                 "Cartera pendiente": money(neg_c.get(t, 0)),
