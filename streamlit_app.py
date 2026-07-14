@@ -288,12 +288,19 @@ def _estado_proveedor(con):
     """Estado actual por proveedor: cartera total y total vencido."""
     st.markdown("Estado actual de cada proveedor: **saldo total de cartera** y **total vencido**. "
                 "Un proveedor esta *En mora* si tiene saldo vencido, o *Al dia* si no.")
-    empresa = st.selectbox("Empresa (opcional)", [""] + core.empresas_distintas(con),
-                           format_func=lambda x: "Todas" if x == "" else x, key="ep_emp")
+    fc1, fc2 = st.columns([2, 1])
+    empresa = fc1.selectbox("Empresa (opcional)", [""] + core.empresas_distintas(con),
+                            format_func=lambda x: "Todas" if x == "" else x, key="ep_emp")
+    solo_vencidos = fc2.checkbox("Solo proveedores con vencido (en mora)", key="ep_venc")
     provs = core.proveedores_con_saldo(con, empresa)
     if not provs:
         st.info("No hay proveedores con saldo pendiente.")
         return
+    if solo_vencidos:
+        provs = [p for p in provs if p.get("vencido", 0) > 0]
+        if not provs:
+            st.info("No hay proveedores con saldo vencido.")
+            return
     tot_saldo = round(sum(p["saldo"] for p in provs), 2)
     tot_desc = round(sum(p.get("descuento", 0) for p in provs), 2)
     tot_cartera = round(sum(p.get("cartera_neta", p["saldo"]) for p in provs), 2)
