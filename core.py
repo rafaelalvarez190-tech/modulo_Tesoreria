@@ -93,6 +93,13 @@ CREATE TABLE IF NOT EXISTS anulacion (
     n_pagos INTEGER, n_anticipos INTEGER,
     fecha TEXT, usuario TEXT, motivo TEXT
 );
+CREATE TABLE IF NOT EXISTS descuento_pronto_pago (
+    identificacion TEXT PRIMARY KEY,
+    proveedor TEXT,
+    porcentaje REAL DEFAULT 0,
+    iva REAL DEFAULT 19,
+    activo INTEGER DEFAULT 1
+);
 """
 
 
@@ -114,6 +121,9 @@ def init_db(con):
     _ensure_column(con, "pago", "anulado", "INTEGER DEFAULT 0")
     _ensure_column(con, "anticipo", "anulado", "INTEGER DEFAULT 0")
     _ensure_column(con, "factura", "tipo_negociacion", "TEXT")
+    con.execute(
+        "INSERT OR IGNORE INTO descuento_pronto_pago (identificacion, proveedor, porcentaje, iva, activo)"
+        " VALUES (?,?,?,?,1)", ("901398813", "Proveedor Umazf", 1.5, 19))
     con.commit()
 
 
@@ -481,9 +491,72 @@ def registrar_pago(con, fid, datos, usuario="demo"):
 # --------------------------------------------------------------------------
 # Abono a nivel de proveedor (distribucion por antiguedad)
 # --------------------------------------------------------------------------
+def descuentos_config(con):
+    """Devuelve {identificacion: {porcentaje, iva, proveedor}} de descuentos por pronto pago activos."""
+    return {r["identificacion"]: dict(r)
+            for r in con.execute("SELECT * FROM descuento_pronto_pago WHERE activo=1").fetchall()}
+
+
+def descuento_valor(cfg, valor_con_iva):
+    """Descuento = (valor / (1 + iva%)) * porcentaje%. valor_con_iva ya incluye IVA."""
+    if not cfg or not valor_con_iva:
+        return 0.0
+    base = float(valor_con_iva) / (1 + (cfg.get("iva") or 0) / 100.0)
+    return round(base * (cfg.get("porcentaje") or 0) / 100.0, 2)
+
+
+def descuento_config_upsert(con, identificacion, proveedor, porcentaje, iva=19, activo=1):
+    con.execute(
+        "INSERT INTO descuento_pronto_pago (identificacion, proveedor, porcentaje, iva, activo)"
+        " VALUES (?,?,?,?,?) ON CONFLICT(identificacion) DO UPDATE SET proveedor=excluded.proveedor,"
+        " porcentaje=excluded.porcentaje, iva=excluded.iva, activo=excluded.activo",
+        (str(identificacion).strip(), (proveedor or "").strip(), float(porcentaje or 0),
+         float(iva or 0), 1 if activo else 0))
+    con.commit()
+
+
+def descuento_ganado(con):
+    """Descuento por pronto pago EFECTIVAMENTE ganado: pagos (no anulados) hechos en o antes
+    de la fecha de vencimiento, sobre el valor sin IVA de lo pagado. Devuelve total + detalle."""
+    cfg = descuentos_config(con)
+    if not cfg:
+        return {"total": 0.0, "detalle": [], "por_proveedor": {}}
+    total = 0.0
+    det = []
+    por_prov = {}
+    rows = con.execute(
+        "SELECT p.fecha_pago fp, p.valor_pagado vp, p.numero_comprobante comp, p.medio_pago medio,"
+        " f.fecha_vencimiento fv, f.identificacion nit, f.proveedor prov, f.numero_factura nf "
+        "FROM pago p JOIN factura f ON f.id=p.factura_id WHERE p.anulado=0").fetchall()
+    for r in rows:
+        c = cfg.get(r["nit"])
+        if not c:
+            continue
+        fp = str(r["fp"] or "")[:10]
+        fv = str(r["fv"] or "")[:10]
+        if not fp or not fv or fp > fv:   # pago despues del vencimiento: sin descuento
+            continue
+        desc = descuento_valor(c, r["vp"] or 0)
+        if desc <= 0:
+            continue
+        total += desc
+        key = r["nit"]
+        por_prov.setdefault(key, {"proveedor": r["prov"], "nit": r["nit"], "descuento": 0.0, "n": 0})
+        por_prov[key]["descuento"] = round(por_prov[key]["descuento"] + desc, 2)
+        por_prov[key]["n"] += 1
+        det.append(dict(fecha=fp, proveedor=r["prov"], nit=r["nit"], factura=r["nf"],
+                        comprobante=r["comp"], valor_pagado=r["vp"], descuento=desc))
+    det.sort(key=lambda x: str(x["fecha"]), reverse=True)
+    return {"total": round(total, 2), "detalle": det,
+            "por_proveedor": sorted(por_prov.values(), key=lambda x: -x["descuento"])}
+
+
 def proveedores_con_saldo(con, empresa=""):
-    """Devuelve [{nit, proveedor, n, saldo}] de proveedores con saldo pendiente."""
+    """Devuelve [{nit, proveedor, n, saldo, vencido, descuento, cartera_neta}] de proveedores
+    con saldo pendiente. 'descuento' = descuento por pronto pago disponible (facturas aun no
+    vencidas de proveedores con descuento configurado); 'cartera_neta' = saldo - descuento."""
     facs = list_facturas(con, empresa=empresa)
+    cfg = descuentos_config(con)
     agg = {}
     for f in facs:
         if f["estado"] == "Anulada" or f["saldo_tesoreria"] <= 0:
@@ -491,7 +564,7 @@ def proveedores_con_saldo(con, empresa=""):
         k = f["identificacion"]
         if k not in agg:
             agg[k] = {"nit": k, "proveedor": f["proveedor"], "n": 0, "saldo": 0.0,
-                      "vencido": 0.0, "tipos": set()}
+                      "vencido": 0.0, "descuento": 0.0, "tipos": set()}
         agg[k]["n"] += 1
         agg[k]["saldo"] = round(agg[k]["saldo"] + f["saldo_tesoreria"], 2)
         tn = (f.get("tipo_negociacion") or "").strip()
@@ -499,9 +572,15 @@ def proveedores_con_saldo(con, empresa=""):
             agg[k]["tipos"].add(tn)
         if f["vencida"]:
             agg[k]["vencido"] = round(agg[k]["vencido"] + f["saldo_tesoreria"], 2)
+        # descuento disponible: solo si aun no esta vencida (se paga antes de vencimiento)
+        c = cfg.get(k)
+        if c and f["cubeta"] == "Corriente":
+            agg[k]["descuento"] = round(agg[k]["descuento"]
+                                        + descuento_valor(c, f["saldo_tesoreria"]), 2)
     out = sorted(agg.values(), key=lambda x: -x["saldo"])
     for p in out:
         p["tipos"] = ", ".join(sorted(p["tipos"])) if p["tipos"] else "-"
+        p["cartera_neta"] = round(p["saldo"] - p["descuento"], 2)
     return out
 
 
@@ -848,8 +927,11 @@ def dashboard_data(con):
         monto_vencido=round(sum(f["saldo_tesoreria"] for f in vencidas), 2),
         n_por_vencer=len(por_vencer),
         monto_por_vencer=round(sum(f["saldo_tesoreria"] for f in por_vencer), 2))
+    desc = descuento_ganado(con)
+    kpis["descuento_ganado"] = desc["total"]
     return dict(kpis=kpis, aging={k: round(v, 2) for k, v in aging.items()},
                 estados=estados_count, flujo=flujo,
                 empresas={k: v for k, v in sorted(empresas.items(), key=lambda x: -x[1])},
                 neg_cartera={k: v for k, v in sorted(neg_cartera.items(), key=lambda x: -x[1])},
-                neg_pagos={k: v for k, v in sorted(neg_pagos.items(), key=lambda x: -x[1])})
+                neg_pagos={k: v for k, v in sorted(neg_pagos.items(), key=lambda x: -x[1])},
+                descuento=desc)
