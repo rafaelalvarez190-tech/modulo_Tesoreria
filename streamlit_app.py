@@ -294,21 +294,26 @@ def _estado_proveedor(con):
     if not provs:
         st.info("No hay proveedores con saldo pendiente.")
         return
-    tot_cartera = round(sum(p["saldo"] for p in provs), 2)
+    tot_saldo = round(sum(p["saldo"] for p in provs), 2)
+    tot_desc = round(sum(p.get("descuento", 0) for p in provs), 2)
+    tot_cartera = round(sum(p.get("cartera_neta", p["saldo"]) for p in provs), 2)
     tot_vencido = round(sum(p.get("vencido", 0) for p in provs), 2)
-    en_mora = sum(1 for p in provs if p.get("vencido", 0) > 0)
     c = st.columns(4)
     c[0].metric("Proveedores con cartera", len(provs))
-    c[1].metric("Cartera total", money(tot_cartera))
-    c[2].metric("Total vencido", money(tot_vencido),
-                f"{(tot_vencido / tot_cartera * 100):.0f}% de la cartera" if tot_cartera else None,
+    c[1].metric("Cartera total (neta de descuento)", money(tot_cartera),
+                f"bruta {money(tot_saldo)}")
+    c[2].metric("Descuento pronto pago disponible", money(tot_desc))
+    c[3].metric("Total vencido", money(tot_vencido),
+                f"{(tot_vencido / tot_saldo * 100):.0f}% de la cartera" if tot_saldo else None,
                 delta_color="inverse")
-    c[3].metric("Proveedores en mora", en_mora)
 
     df = pd.DataFrame([{
         "Proveedor": p["proveedor"], "NIT": p["nit"], "Facturas": p["n"],
         "Tipo negociacion": p.get("tipos", "-"),
-        "Cartera total": money(p["saldo"]), "Vencido": money(p.get("vencido", 0)),
+        "Cartera bruta": money(p["saldo"]),
+        "Descuento": money(p.get("descuento", 0)),
+        "Cartera total": money(p.get("cartera_neta", p["saldo"])),
+        "Vencido": money(p.get("vencido", 0)),
         "% vencido": round(p.get("vencido", 0) / p["saldo"] * 100, 1) if p["saldo"] else 0.0,
         "Estado": "En mora" if p.get("vencido", 0) > 0 else "Al dia",
     } for p in provs])
@@ -703,10 +708,12 @@ if pagina == "Dashboard":
         c2.metric("Total pendiente", money(k["total_pendiente"]))
         c3.metric("Total pagado a cartera", money(k["total_pagado"]))
         c4.metric("Total pagado a anticipo disponible", money(k["total_anticipo"]))
-        c5, c6 = st.columns(2)
+        c5, c6, c7 = st.columns(3)
         c5.metric("Facturas vencidas", k["n_vencidas"], f"{money(k['monto_vencido'])} en mora",
                   delta_color="inverse")
         c6.metric("Por vencer (corriente)", k["n_por_vencer"], money(k["monto_por_vencer"]))
+        c7.metric("Descuento pronto pago ganado", money(k.get("descuento_ganado", 0)),
+                  "pagos antes de vencimiento")
 
         st.write("")
         g1, g2 = st.columns(2)
@@ -757,6 +764,29 @@ if pagina == "Dashboard":
             st.dataframe(tabla, use_container_width=True, hide_index=True)
         else:
             st.caption("Aun no hay facturas con tipo de negociacion.")
+
+        desc = d.get("descuento", {})
+        st.write("")
+        st.subheader("Descuento por pronto pago ganado")
+        st.caption("Descuento obtenido al pagar facturas de proveedores con descuento configurado "
+                   "**antes de su fecha de vencimiento**. Se calcula sobre el valor sin IVA de lo pagado.")
+        if desc.get("total"):
+            dd1, dd2 = st.columns([1, 2])
+            dd1.metric("Total ganado", money(desc["total"]))
+            if desc.get("por_proveedor"):
+                st.altair_chart(_chart_moneda(
+                    [p["proveedor"] for p in desc["por_proveedor"]],
+                    [p["descuento"] for p in desc["por_proveedor"]],
+                    "#2e7d32", "Proveedor", horizontal=True), use_container_width=True)
+            if desc.get("detalle"):
+                st.dataframe(pd.DataFrame([{
+                    "Fecha pago": x["fecha"], "Proveedor": x["proveedor"], "NIT": x["nit"],
+                    "Factura": x["factura"], "Comprobante": x["comprobante"],
+                    "Valor pagado": money(x["valor_pagado"]), "Descuento": money(x["descuento"]),
+                } for x in desc["detalle"]]), use_container_width=True, hide_index=True)
+        else:
+            st.caption("Aun no se ha ganado descuento (no hay pagos antes de vencimiento a "
+                       "proveedores con descuento configurado).")
 
 
 # ===============================================================================
